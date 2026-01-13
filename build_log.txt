@@ -1,0 +1,187 @@
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -scheme ClapsBoard -configuration Debug
+
+2026-01-12 19:32:38.732 xcodebuild[24299:535231] [MT] IDERunDestination: Supported platforms for the buildables in the current scheme is empty.
+--- xcodebuild: WARNING: Using the first of multiple matching destinations:
+{ platform:macOS, arch:arm64, variant:Mac Catalyst, id:00008132-000409292205001C, name:My Mac }
+{ platform:macOS, arch:x86_64, variant:Mac Catalyst, id:00008132-000409292205001C, name:My Mac }
+{ platform:macOS, arch:arm64, variant:Designed for [iPad,iPhone], id:00008132-000409292205001C, name:My Mac }
+{ platform:iOS, id:dvtdevice-DVTiPhonePlaceholder-iphoneos:placeholder, name:Any iOS Device }
+{ platform:iOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-iphonesimulator:placeholder, name:Any iOS Simulator Device }
+{ platform:macOS, variant:Mac Catalyst, name:Any Mac }
+{ platform:iOS Simulator, arch:arm64, id:CEA0F041-F787-4285-BF5A-BA1A0341F4A0, OS:26.2, name:iPad (A16) }
+{ platform:iOS Simulator, arch:arm64, id:00621407-B46E-4903-9CB8-14202BD51D11, OS:26.2, name:iPad Air 11-inch (M3) }
+{ platform:iOS Simulator, arch:arm64, id:BC5711B1-97A8-4E71-AA93-44F4707B69D6, OS:26.2, name:iPad Air 13-inch (M3) }
+{ platform:iOS Simulator, arch:arm64, id:398E9B6E-BC48-4A4A-B4FE-F9531F144C73, OS:26.2, name:iPad Pro 11-inch (M5) }
+{ platform:iOS Simulator, arch:arm64, id:9800CDC4-1D02-4749-8437-6421CBFAFF88, OS:26.2, name:iPad Pro 13-inch (M5) }
+{ platform:iOS Simulator, arch:arm64, id:081381CC-645E-4B66-A4FE-BE499F0EFD0B, OS:26.2, name:iPad mini (A17 Pro) }
+{ platform:iOS Simulator, arch:arm64, id:2A7FAF2C-5BA6-4428-8205-B697897D21AB, OS:26.2, name:iPhone 16e }
+{ platform:iOS Simulator, arch:arm64, id:2CD54A54-6866-4D3D-B395-C3993122B42F, OS:26.2, name:iPhone 17 }
+{ platform:iOS Simulator, arch:arm64, id:8F0F794B-0371-4937-B150-7F1DBD2E24C0, OS:26.2, name:iPhone 17 Pro }
+{ platform:iOS Simulator, arch:arm64, id:3A8C923B-A107-452E-9A5E-33EF84C899F2, OS:26.2, name:iPhone 17 Pro Max }
+{ platform:iOS Simulator, arch:arm64, id:5D438605-FA85-4B40-A3B4-1D9ED37B4F20, OS:26.2, name:iPhone Air }
+{ platform:iOS, arch:arm64, id:00008150-001948293C44401C, name:Amnas }
+ComputePackagePrebuildTargetDependencyGraph
+
+Prepare packages
+
+CreateBuildRequest
+
+SendProjectDescription
+
+CreateBuildOperation
+
+ComputeTargetDependencyGraph
+note: Building targets in dependency order
+note: Target dependency graph (1 target)
+    Target 'ClapsBoard' in project 'ClapsBoard' (no dependencies)
+
+GatherProvisioningInputs
+
+CreateBuildDescription
+
+ClangStatCache /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk /Users/amnasahamed/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/macosx26.2-25C57-00fa09913b459cbbc988d1f6730289ae.sdkstatcache
+    cd /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard.xcodeproj
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk -o /Users/amnasahamed/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/macosx26.2-25C57-00fa09913b459cbbc988d1f6730289ae.sdkstatcache
+
+ProcessProductPackaging /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/ClapsBoard.entitlements /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/ClapsBoard.app.xcent (in target 'ClapsBoard' from project 'ClapsBoard')
+    cd /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS
+    
+    Entitlements:
+    
+    {
+    "application-identifier" = "B5PMRXY8VD.com.clapsboard.app";
+    "aps-environment" = development;
+    "com.apple.application-identifier" = "B5PMRXY8VD.com.clapsboard.app";
+    "com.apple.developer.aps-environment" = development;
+    "com.apple.developer.associated-domains" =     (
+        "applinks:clapsboard.app"
+    );
+    "com.apple.developer.team-identifier" = B5PMRXY8VD;
+    "com.apple.security.app-sandbox" = 1;
+    "com.apple.security.device.camera" = 1;
+    "com.apple.security.device.microphone" = 1;
+    "com.apple.security.files.user-selected.read-write" = 1;
+    "com.apple.security.get-task-allow" = 1;
+    "com.apple.security.personal-information.photos-library" = 1;
+    "get-task-allow" = 1;
+}
+    
+    builtin-productPackagingUtility /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/ClapsBoard.entitlements -entitlements -format xml -o /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/ClapsBoard.app.xcent
+
+ProcessProductPackagingDER /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/ClapsBoard.app.xcent /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/ClapsBoard.app.xcent.der (in target 'ClapsBoard' from project 'ClapsBoard')
+    cd /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS
+    /usr/bin/derq query -f xml -i /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/ClapsBoard.app.xcent -o /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/ClapsBoard.app.xcent.der --raw
+
+ProcessInfoPlistFile /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Products/Debug-maccatalyst/ClapsBoard.app/Contents/Info.plist /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Info.plist (in target 'ClapsBoard' from project 'ClapsBoard')
+    cd /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS
+    builtin-infoPlistUtility /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Info.plist -producttype com.apple.product-type.application -genpkginfo /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Products/Debug-maccatalyst/ClapsBoard.app/Contents/PkgInfo -expandbuildsettings -platform macosx -additionalcontentfile /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/assetcatalog_generated_info.plist -o /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Products/Debug-maccatalyst/ClapsBoard.app/Contents/Info.plist
+removing entry for "LSRequiresIPhoneOS" - not supported on macOS
+adding entry for "NSSupportsAutomaticTermination" => 1
+adding entry for "NSSupportsSuddenTermination" => 1
+
+SwiftDriver ClapsBoard normal arm64 com.apple.xcode.tools.swift.compiler (in target 'ClapsBoard' from project 'ClapsBoard')
+    cd /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS
+    builtin-SwiftDriver -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name ClapsBoard -Onone -enforce-exclusivity\=checked @/Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/ClapsBoard.SwiftFileList -DDEBUG -DDEBUG -enable-bare-slash-regex -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk -target arm64-apple-ios16.0-macabi -g -module-cache-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -Xfrontend -serialize-debugging-options -enable-testing -index-store-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 5 -I /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Products/Debug-maccatalyst -F /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Products/Debug-maccatalyst -Fsystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/System/iOSSupport/System/Library/Frameworks -Fsystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/System/iOSSupport/System/Library/SubFrameworks -emit-localized-strings -emit-localized-strings-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64 -c -j10 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/amnasahamed/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/macosx26.2-25C57-00fa09913b459cbbc988d1f6730289ae.sdkstatcache -output-file-map /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/ClapsBoard-OutputFileMap.json -use-frontend-parseable-output -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -sdk-module-cache-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -serialize-diagnostics -emit-dependencies -emit-module -emit-module-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/ClapsBoard.swiftmodule -validate-clang-modules-once -clang-build-session-file /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/Session.modulevalidation -Xcc -I/Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/swift-overrides.hmap -emit-const-values -Xfrontend -const-gather-protocols-file -Xfrontend /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/ClapsBoard_const_extract_protocols.json -Xcc -iquote -Xcc /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/ClapsBoard-generated-files.hmap -Xcc -I/Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/ClapsBoard-own-target-headers.hmap -Xcc -I/Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/ClapsBoard-all-target-headers.hmap -Xcc -iquote -Xcc /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/ClapsBoard-project-headers.hmap -Xcc -I/Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Products/Debug-maccatalyst/include -Xcc -isystem -Xcc /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/System/iOSSupport/usr/include -Xcc -I/Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/DerivedSources-normal/arm64 -Xcc -I/Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/DerivedSources/arm64 -Xcc -I/Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/DerivedSources -Xcc -DDEBUG\=1 -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/ClapsBoard-Swift.h -working-directory /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS -experimental-emit-module-separately -disable-cmo
+
+SwiftCompile normal arm64 Compiling\ ClapsboardApp.swift,\ ContentView.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/ClapsboardApp.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/ContentView.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+
+SwiftCompile normal arm64 /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/ClapsboardApp.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+    cd /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS
+    
+
+SwiftCompile normal arm64 /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/ContentView.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+    cd /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS
+    
+
+SwiftCompile normal arm64 Compiling\ CanvasViewModel.swift,\ CameraManager.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/ViewModels/CanvasViewModel.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/ViewModels/CameraManager.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+Failed frontend command:
+/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-frontend -frontend -c /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/ClapsboardApp.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/ContentView.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Models/DrawingModels.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Models/ClassSession.swift -primary-file /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/ViewModels/CanvasViewModel.swift -primary-file /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/ViewModels/CameraManager.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Board/BoardView.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Board/DrawingCanvas.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Board/ToolbarView.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Board/PropertiesPanel.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Camera/CameraOverlay.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Calendar/CalendarView.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Calendar/ClassFormSheet.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Documents/DocumentsView.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Common/OnboardingView.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Common/SettingsView.swift /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/DerivedSources/GeneratedAssetSymbols.swift -emit-dependencies-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/CanvasViewModel.d -emit-const-values-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/CanvasViewModel.swiftconstvalues -emit-reference-dependencies-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/CanvasViewModel.swiftdeps -serialize-diagnostics-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/CanvasViewModel.dia -emit-dependencies-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/CameraManager.d -emit-const-values-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/CameraManager.swiftconstvalues -emit-reference-dependencies-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/CameraManager.swiftdeps -serialize-diagnostics-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/CameraManager.dia -emit-localized-strings -emit-localized-strings-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64 -target arm64-apple-ios16.0-macabi -module-can-import-version AppKit 2685.30.107 2685.30.107 -module-can-import-version DeveloperToolsSupport 23.0.4 23.0.4 -module-can-import-version SwiftUI 7.2.5.1 7.2.5 -module-can-import-version UIKit 9126.2.4 9126.2.4 -disable-cross-import-overlay-search -swift-module-cross-import AVKit /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/iOSSupport/System/Library/Frameworks/AVKit.framework/Modules/AVKit.swiftcrossimport/SwiftUI.swiftoverlay -swift-module-cross-import AVKit /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/System/iOSSupport/System/Library/Frameworks/AVKit.framework/Modules/AVKit.swiftcrossimport/SwiftUI.swiftoverlay -swift-module-cross-import QuickLook /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/iOSSupport/System/Library/Frameworks/QuickLook.framework/Modules/QuickLook.swiftcrossimport/SwiftUI.swiftoverlay -swift-module-cross-import QuickLook /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/System/iOSSupport/System/Library/Frameworks/QuickLook.framework/Modules/QuickLook.swiftcrossimport/SwiftUI.swiftoverlay -swift-module-cross-import StoreKit /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/iOSSupport/System/Library/Frameworks/StoreKit.framework/Modules/StoreKit.swiftcrossimport/SwiftUI.swiftoverlay -swift-module-cross-import StoreKit /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/System/iOSSupport/System/Library/Frameworks/StoreKit.framework/Modules/StoreKit.swiftcrossimport/SwiftUI.swiftoverlay -load-resolved-plugin /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins/libFoundationMacros.dylib\#/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/bin/swift-plugin-server\#FoundationMacros -load-resolved-plugin /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins/libObservationMacros.dylib\#/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/bin/swift-plugin-server\#ObservationMacros -load-resolved-plugin /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins/libPreviewsMacros.dylib\#/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/bin/swift-plugin-server\#PreviewsMacros -load-resolved-plugin /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins/libSwiftMacros.dylib\#/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/bin/swift-plugin-server\#SwiftMacros -load-resolved-plugin /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins/libSwiftUIMacros.dylib\#/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/bin/swift-plugin-server\#SwiftUIMacros -load-resolved-plugin /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins/libTipKitMacros.dylib\#/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/bin/swift-plugin-server\#TipKitMacros -disable-implicit-swift-modules -Xcc -fno-implicit-modules -Xcc -fno-implicit-module-maps -explicit-swift-module-map-file /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/ClapsBoard-dependencies-1.json -Xllvm -aarch64-use-tbi -enable-objc-interop -stack-check -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk -I /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Products/Debug-maccatalyst -F /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Products/Debug-maccatalyst -Fsystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/System/iOSSupport/System/Library/Frameworks -Fsystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/System/iOSSupport/System/Library/SubFrameworks -no-color-diagnostics -Xcc -fno-color-diagnostics -enable-testing -g -debug-info-format\=dwarf -dwarf-version\=4 -module-cache-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -swift-version 5 -enforce-exclusivity\=checked -Onone -D DEBUG -D DEBUG -serialize-debugging-options -const-gather-protocols-file /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/ClapsBoard_const_extract_protocols.json -enable-experimental-feature DebugDescriptionMacro -enable-bare-slash-regex -empty-abi-descriptor -validate-clang-modules-once -clang-build-session-file /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/Session.modulevalidation -Xcc -working-directory -Xcc /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS -enable-anonymous-context-mangled-names -file-compilation-dir /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -Xcc -ivfsstatcache -Xcc /Users/amnasahamed/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/macosx26.2-25C57-00fa09913b459cbbc988d1f6730289ae.sdkstatcache -Xcc -I/Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/swift-overrides.hmap -Xcc -iquote -Xcc /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/ClapsBoard-generated-files.hmap -Xcc -I/Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/ClapsBoard-own-target-headers.hmap -Xcc -I/Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/ClapsBoard-all-target-headers.hmap -Xcc -iquote -Xcc /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/ClapsBoard-project-headers.hmap -Xcc -I/Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Products/Debug-maccatalyst/include -Xcc -isystem -Xcc /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/System/iOSSupport/usr/include -Xcc -I/Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/DerivedSources-normal/arm64 -Xcc -I/Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/DerivedSources/arm64 -Xcc -I/Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/DerivedSources -Xcc -DDEBUG\=1 -Xcc -DDEBUG\=1 -no-auto-bridging-header-chaining -module-name ClapsBoard -frontend-parseable-output -disable-clang-spi -target-sdk-version 26.2 -target-sdk-name macosx26.2 -prebuilt-module-cache-path /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx/prebuilt-modules/26.2 -clang-target arm64-apple-ios26.2-macabi -in-process-plugin-server-path /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/libSwiftInProcPluginServer.dylib -o /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/CanvasViewModel.o -o /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/CameraManager.o -index-unit-output-path /ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/CanvasViewModel.o -index-unit-output-path /ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/Objects-normal/arm64/CameraManager.o -index-store-path /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Index.noindex/DataStore -index-system-modules
+
+SwiftCompile normal arm64 /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/ViewModels/CanvasViewModel.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+    cd /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS
+    
+
+SwiftCompile normal arm64 /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/ViewModels/CameraManager.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+    cd /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS
+    
+/Volumes/AppleSSD/Apps/Claps Board ios/v1/ClapsBoard-iOS/ClapsBoard/ViewModels/CameraManager.swift:89:117: warning: 'allowBluetooth' was deprecated in Mac Catalyst 13.1: renamed to 'AVAudioSession.CategoryOptions.allowBluetoothHFP'
+            try session.setCategory(.playAndRecord, mode: .videoChat, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetooth])
+                                                                                                                    ^
+/Volumes/AppleSSD/Apps/Claps Board ios/v1/ClapsBoard-iOS/ClapsBoard/ViewModels/CameraManager.swift:89:117: note: use 'AVAudioSession.CategoryOptions.allowBluetoothHFP' instead
+            try session.setCategory(.playAndRecord, mode: .videoChat, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetooth])
+                                                                                                                    ^~~~~~~~~~~~~~
+                                                                                                                    AVAudioSession.CategoryOptions.allowBluetoothHFP
+/Volumes/AppleSSD/Apps/Claps Board ios/v1/ClapsBoard-iOS/ClapsBoard/ViewModels/CameraManager.swift:97:125: warning: 'allowBluetooth' was deprecated in Mac Catalyst 13.1: renamed to 'AVAudioSession.CategoryOptions.allowBluetoothHFP'
+                    try session.setCategory(.playAndRecord, mode: .videoChat, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetooth])
+                                                                                                                            ^
+/Volumes/AppleSSD/Apps/Claps Board ios/v1/ClapsBoard-iOS/ClapsBoard/ViewModels/CameraManager.swift:97:125: note: use 'AVAudioSession.CategoryOptions.allowBluetoothHFP' instead
+                    try session.setCategory(.playAndRecord, mode: .videoChat, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetooth])
+                                                                                                                            ^~~~~~~~~~~~~~
+                                                                                                                            AVAudioSession.CategoryOptions.allowBluetoothHFP
+/Volumes/AppleSSD/Apps/Claps Board ios/v1/ClapsBoard-iOS/ClapsBoard/ViewModels/CameraManager.swift:94:75: warning: variable 'self' was written to, but never read
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                                                                          ^
+/Volumes/AppleSSD/Apps/Claps Board ios/v1/ClapsBoard-iOS/ClapsBoard/ViewModels/CameraManager.swift:189:31: warning: conditional cast from 'CameraManager' to 'AnyObject' always succeeds
+        if let engine = (self as? AnyObject)?.value(forKey: "hapticEngine") as? CHHapticEngine {
+                              ^
+/Volumes/AppleSSD/Apps/Claps Board ios/v1/ClapsBoard-iOS/ClapsBoard/ViewModels/CameraManager.swift:191:28: error: value of type 'CHHapticEngine' has no member 'prewarm'
+                try engine.prewarm()
+                    ~~~~~~ ^~~~~~~
+
+SwiftCompile normal arm64 Compiling\ BoardView.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Board/BoardView.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+
+SwiftCompile normal arm64 /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Board/BoardView.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+    cd /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS
+    
+
+SwiftCompile normal arm64 Compiling\ GeneratedAssetSymbols.swift /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/DerivedSources/GeneratedAssetSymbols.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+SwiftCompile normal arm64 /Users/amnasahamed/Library/Developer/Xcode/DerivedData/ClapsBoard-bdhurrcedhymulfqimbvrkkrqfej/Build/Intermediates.noindex/ClapsBoard.build/Debug-maccatalyst/ClapsBoard.build/DerivedSources/GeneratedAssetSymbols.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+    cd /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS
+    
+
+SwiftEmitModule normal arm64 Emitting\ module\ for\ ClapsBoard (in target 'ClapsBoard' from project 'ClapsBoard')
+
+EmitSwiftModule normal arm64 (in target 'ClapsBoard' from project 'ClapsBoard')
+    cd /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS
+    
+
+SwiftCompile normal arm64 Compiling\ ClassFormSheet.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Calendar/ClassFormSheet.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+
+SwiftCompile normal arm64 /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Calendar/ClassFormSheet.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+    cd /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS
+    
+
+SwiftCompile normal arm64 Compiling\ DrawingCanvas.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Board/DrawingCanvas.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+
+SwiftCompile normal arm64 /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Board/DrawingCanvas.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+    cd /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS
+    
+
+SwiftCompile normal arm64 Compiling\ DocumentsView.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Documents/DocumentsView.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+
+SwiftCompile normal arm64 /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Documents/DocumentsView.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+    cd /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS
+    
+
+SwiftCompile normal arm64 Compiling\ CalendarView.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Calendar/CalendarView.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+SwiftCompile normal arm64 /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Calendar/CalendarView.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+    cd /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS
+    
+
+SwiftCompile normal arm64 Compiling\ CameraOverlay.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Camera/CameraOverlay.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+
+SwiftCompile normal arm64 /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Camera/CameraOverlay.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+    cd /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS
+    
+
+SwiftCompile normal arm64 Compiling\ SettingsView.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/Views/Common/SettingsView.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+
+** BUILD FAILED **
+
+
+The following build commands failed:
+	SwiftCompile normal arm64 Compiling\ CanvasViewModel.swift,\ CameraManager.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/ViewModels/CanvasViewModel.swift /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/ViewModels/CameraManager.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+	SwiftCompile normal arm64 /Volumes/AppleSSD/Apps/Claps\ Board\ ios/v1/ClapsBoard-iOS/ClapsBoard/ViewModels/CameraManager.swift (in target 'ClapsBoard' from project 'ClapsBoard')
+	Building project ClapsBoard with scheme ClapsBoard and configuration Debug
+(3 failures)

@@ -1,0 +1,94 @@
+# Xcode
+#
+# gitignore contributors: remember to update Global/Xcode.gitignore, Objective-C.gitignore & Swift.gitignore
+
+## User settings
+xcuserdata/
+
+## Compatibility with Xcode 8 and earlier (Xcode 8 added Swift Package Manager integration)
+Packages/
+.build/
+
+## Compatibility with Xcode 3 and earlier (Xcode 3 had no support for .git exclusion)
+*.git
+*.pvr
+*.bundle
+
+## Crash logs
+*.ips
+*.crashlog
+*.crash
+
+## Build generated
+build/
+DerivedData/
+
+## IndexStores
+IndexStores
+
+## Various settings
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+
+## Obj-C/Swift specific
+*.hmap
+
+## Swift Package Manager
+.swiftpm/configuration/registries.json
+.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+.netrc
+
+## Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+## Swift Package Manager
+#
+# Add this line if you want to avoid checking in source code from Swift Package Manager dependencies.
+# Packages/
+# Package.pins
+# Package.resolved
+# *.xcodeproj
+#
+# Xcode automatically generates this directory with a .hierarchically nested package.
+
+## CocoaPods
+Pods/
+!Podfile.lock
+
+## Carthage
+Carthage/Build/
+
+## Accio
+Dependencies/
+.accio/
+
+## fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+## Code Injection
+iOSInjectionProject/
+
+## macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+## Thumbnails
+*.swp
+*~.nib
+
+## Finder
+.Spotlight-V100
+.Trashes
