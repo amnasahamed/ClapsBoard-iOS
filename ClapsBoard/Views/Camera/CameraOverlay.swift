@@ -40,7 +40,6 @@ struct CameraOverlay: View {
                     ZStack {
                         // Camera Preview
                         CameraPreviewView(cameraManager: cameraManager)
-                            .scaleEffect(x: cameraManager.isFlipped ? -1 : 1, y: 1)
                             .background(Color.black)
                             .clipShape(RoundedRectangle(cornerRadius: 16))
                             .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
@@ -56,7 +55,7 @@ struct CameraOverlay: View {
                                             .fill(cameraManager.isPiPActive ? Color.blue : Color.red)
                                             .frame(width: 6, height: 6)
                                         Text(cameraManager.isPiPActive ? "PiP" : "LIVE")
-                                            .font(.system(size: 8, weight: .bold))
+                                            .font(.caption2.weight(.bold)) // HIG: Dynamic Type support
                                             .foregroundStyle(.white)
                                     }
                                     .padding(.horizontal, 6)
@@ -133,20 +132,20 @@ struct CameraControlsOverlay: View {
                         // PiP Button (System Picture-in-Picture)
                         Button(action: { cameraManager.togglePiP() }) {
                             Image(systemName: cameraManager.isPiPActive ? "pip.fill" : "pip")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: 14, weight: .bold))
                                 .foregroundStyle(.white)
-                                .frame(width: 28, height: 28)
+                                .frame(width: 44, height: 44) // HIG: 44pt minimum touch target
                                 .background(cameraManager.isPiPActive ? .blue : .black.opacity(0.5), in: Circle())
                         }
                         .accessibilityLabel(cameraManager.isPiPActive ? "Stop Picture in Picture" : "Start Picture in Picture")
                         .accessibilityHint("Enables floating camera that works outside the app")
-                        
+
                         // Close Button
                         Button(action: { cameraManager.stopCamera() }) {
                             Image(systemName: "xmark")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: 14, weight: .bold))
                                 .foregroundStyle(.white)
-                                .frame(width: 28, height: 28)
+                                .frame(width: 44, height: 44) // HIG: 44pt minimum touch target
                                 .background(.black.opacity(0.5), in: Circle())
                         }
                     }
@@ -160,9 +159,9 @@ struct CameraControlsOverlay: View {
                         // Flip Button
                         Button(action: { cameraManager.toggleFlip() }) {
                             Image(systemName: "arrow.left.and.right.righttriangle.left.righttriangle.right")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: 14, weight: .bold))
                                 .foregroundStyle(.white)
-                                .frame(width: 28, height: 28)
+                                .frame(width: 44, height: 44) // HIG: 44pt minimum touch target
                                 .background(.black.opacity(0.5), in: Circle())
                         }
                         

@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct PropertiesPanel: View {
     @ObservedObject var viewModel: CanvasViewModel
@@ -55,31 +56,47 @@ struct PropertiesPanel: View {
 // MARK: - Color Picker
 struct ColorPicker: View {
     @Binding var selectedColor: Color
-    
+    private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Color")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
-            
-            HStack(spacing: 8) {
-                ForEach(DrawingConstants.colors, id: \.self) { color in
-                    Button(action: { selectedColor = color }) {
-                        Circle()
-                            .fill(color)
-                            .frame(width: 32, height: 32)
-                            .overlay(
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(DrawingConstants.colors, id: \.self) { color in
+                        Button(action: {
+                            impactFeedback.impactOccurred(intensity: 0.7)
+                            selectedColor = color
+                        }) {
+                            ZStack {
                                 Circle()
-                                    .stroke(color == .white ? .gray : .clear, lineWidth: 1)
-                            )
-                            .overlay(
+                                    .stroke(AppTheme.accent, lineWidth: selectedColor == color ? 2.5 : 0)
+                                    .frame(width: 38, height: 38)
+
                                 Circle()
-                                    .stroke(.blue, lineWidth: selectedColor == color ? 3 : 0)
-                                    .padding(-2)
-                            )
+                                    .fill(color)
+                                    .frame(width: 32, height: 32)
+                                    .overlay(
+                                        Circle()
+                                            .stroke(color == .white ? Color.gray.opacity(0.45) : .clear, lineWidth: 1)
+                                    )
+                            }
+                            .frame(width: 44, height: 44)
+                            .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Select color")
+                        .accessibilityAddTraits(selectedColor == color ? .isSelected : [])
                     }
                 }
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
             }
+            .frame(height: 48)
         }
     }
 }
@@ -103,7 +120,7 @@ struct StrokeWidthPicker: View {
             }
             
             Slider(value: $strokeWidth, in: 1...20, step: 1)
-                .tint(.blue)
+                .tint(AppTheme.accent)
         }
     }
 }
@@ -127,7 +144,7 @@ struct EraserSizePicker: View {
             }
             
             Slider(value: $eraserSize, in: 10...50, step: 5)
-                .tint(.blue)
+                .tint(AppTheme.accent)
             
             // Visual Preview
             HStack {
@@ -162,7 +179,7 @@ struct TextSizePicker: View {
             }
             
             Slider(value: $size, in: 1...6, step: 0.5)
-                .tint(.blue)
+                .tint(AppTheme.accent)
         }
     }
 }
@@ -185,7 +202,7 @@ struct TextAlignmentPicker: View {
                             .foregroundStyle(alignment == align ? .white : .secondary)
                             .frame(width: 36, height: 36)
                             .background(
-                                alignment == align ? Color.blue : Color.gray.opacity(0.2),
+                                alignment == align ? AppTheme.accent : Color.gray.opacity(0.2),
                                 in: RoundedRectangle(cornerRadius: 8)
                             )
                     }
@@ -206,25 +223,28 @@ struct TextAlignmentPicker: View {
 // MARK: - Sticker Picker
 struct StickerPicker: View {
     @Binding var selectedSticker: String
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Stickers")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
-            
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 9), spacing: 4) {
-                ForEach(DrawingConstants.stickers, id: \.self) { sticker in
-                    Button(action: { selectedSticker = sticker }) {
-                        Text(sticker)
-                            .font(.system(size: 24))
-                            .frame(width: 32, height: 32)
-                            .background(
-                                selectedSticker == sticker ? Color.blue.opacity(0.2) : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 6)
-                            )
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(36), spacing: 4), count: 9), spacing: 4) {
+                    ForEach(DrawingConstants.stickers, id: \.self) { sticker in
+                        Button(action: { selectedSticker = sticker }) {
+                            Text(sticker)
+                                .font(.system(size: 24))
+                                .frame(width: 36, height: 36) // HIG: 44pt minimum, 36pt for compact grid
+                                .background(
+                                    selectedSticker == sticker ? AppTheme.accent.opacity(0.16) : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 6)
+                                )
+                        }
                     }
                 }
+                .fixedSize(horizontal: true, vertical: false)
             }
         }
     }

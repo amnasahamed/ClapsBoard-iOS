@@ -10,52 +10,54 @@ import PencilKit
 
 struct DrawingCanvas: View {
     @ObservedObject var viewModel: CanvasViewModel
-    
+    let isCanvasTransformGestureActive: Bool
+
     @State private var currentPath: [CGPoint] = []
     @State private var dragOffset: CGSize = .zero
     @State private var textInputPosition: CGPoint?
     @State private var textInput: String = ""
     @State private var showTextInput: Bool = false
     @State private var eraserCursorPosition: CGPoint?
-    
-    @GestureState private var dragState: CGSize = .zero
-    
+    @State private var selectionDragOriginal: DrawingElement?
+    @State private var selectionDidMove = false
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                // Infinite Canvas (10000x10000) - Unlimited drawing space with pan & zoom
+                // Drawing canvas - renders elements at touch location
                 Canvas { context, size in
                     // Draw existing elements
                     for element in viewModel.elements where !element.isDeleted {
                         drawElement(element, in: &context)
                     }
-                    
+
                     // Draw current path (live drawing preview)
                     if !currentPath.isEmpty {
                         drawLivePreview(currentPath, in: &context)
                     }
                 }
-                .frame(width: 10000, height: 10000)
-                .gesture(drawingGesture)
-                
+                .frame(width: geometry.size.width, height: geometry.size.height)
+
                 // Selection overlay for selected element
                 if let selected = viewModel.selectedElement {
                     SelectionOverlay(element: selected, viewModel: viewModel)
                 }
-                
+
                 // Eraser cursor indicator
-                if viewModel.tool == .eraser, let cursorPos = eraserCursorPosition {
-                    ZStack {
-                        Circle()
-                            .fill(Color.red.opacity(0.1))
-                        Circle()
-                            .stroke(Color.red.opacity(0.5), lineWidth: 2)
+                if viewModel.tool == .eraser {
+                    if let cursorPos = eraserCursorPosition {
+                        ZStack {
+                            Circle()
+                                .fill(Color.red.opacity(0.1))
+                            Circle()
+                                .stroke(Color.red.opacity(0.5), lineWidth: 2)
+                        }
+                        .frame(width: viewModel.eraserSize, height: viewModel.eraserSize)
+                        .position(cursorPos)
+                        .allowsHitTesting(false)
                     }
-                    .frame(width: viewModel.eraserSize, height: viewModel.eraserSize)
-                    .position(cursorPos)
-                    .allowsHitTesting(false)
                 }
-                
+
                 // Text input overlay
                 if showTextInput, let position = textInputPosition {
                     TextInputOverlay(
@@ -68,82 +70,119 @@ struct DrawingCanvas: View {
                     )
                 }
             }
-            .clipped()
             .contentShape(Rectangle())
+            .gesture(drawingGesture)
+            .clipped()
+            .onChange(of: isCanvasTransformGestureActive) { isActive in
+                if isActive {
+                    cancelActiveCanvasInteraction()
+                }
+            }
         }
     }
-    
+
     // MARK: - Gestures
     private var drawingGesture: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
+                // Touch location IS the drawing point - canvas fills the view
                 handleDragChanged(value)
             }
             .onEnded { value in
                 handleDragEnded(value)
             }
     }
-    
+
     // MARK: - Gesture Handlers
     private func handleDragChanged(_ value: DragGesture.Value) {
+        guard !isCanvasTransformGestureActive else {
+            cancelActiveCanvasInteraction()
+            return
+        }
+
         let location = value.location
-        
+
+        if viewModel.tool != .select {
+            viewModel.isDrawing = true
+        }
+
         switch viewModel.tool {
         case .select:
-            // Improved selection logic: always try to find the topmost element at location
-            var foundElement: DrawingElement?
-            for element in viewModel.elements.reversed() {
-                if !element.isDeleted && hitTest(location, for: element) {
-                    foundElement = element
-                    break
+            if selectionDragOriginal == nil {
+                guard let found = topmostElement(at: location) else {
+                    viewModel.selectedElement = nil
+                    return
                 }
-            }
-            
-            // If we found a new element, select it
-            if let found = foundElement {
+
                 if viewModel.selectedElement?.id != found.id {
                     viewModel.selectedElement = found
+                    viewModel.triggerHaptic(.selection)
                 }
-            } else {
-                // If we tapped on empty space, deselect
-                viewModel.selectedElement = nil
+                selectionDragOriginal = found
+                selectionDidMove = false
             }
-            
+
+            guard let original = selectionDragOriginal else { return }
+            if abs(value.translation.width) > 1 || abs(value.translation.height) > 1 {
+                selectionDidMove = true
+                let moved = movedElement(original, by: value.translation)
+                viewModel.updateElement(moved)
+                viewModel.selectedElement = moved
+            }
+
         case .eraser:
             eraserCursorPosition = location
             eraseAt(location)
-            
+
         case .text:
             // Text tool just records tap position
             break
-            
+
         case .sticker:
             // Sticker placement on tap
             break
-            
+
         default:
-            // Drawing tools
-            currentPath.append(location)
+            // Drawing tools - only add new points, not every drag changed
+            // This prevents duplicate points from being added too frequently
+            if currentPath.isEmpty || distance(from: currentPath.last!, to: location) > 2 {
+                currentPath.append(location)
+            }
         }
     }
-    
+
+    private func distance(from: CGPoint, to: CGPoint) -> CGFloat {
+        sqrt(pow(to.x - from.x, 2) + pow(to.y - from.y, 2))
+    }
+
     private func handleDragEnded(_ value: DragGesture.Value) {
+        guard !isCanvasTransformGestureActive else {
+            cancelActiveCanvasInteraction()
+            return
+        }
+
         let location = value.location
-        
+
+        defer {
+            viewModel.isDrawing = false
+        }
+
         switch viewModel.tool {
         case .select:
-            // Handle movement if dragging happened (already handled by SelectionOverlay in part)
-            // But we ensure we have the right selection
-            break
-            
+            if selectionDidMove {
+                viewModel.commitChange(description: "Element moved")
+            }
+            selectionDragOriginal = nil
+            selectionDidMove = false
+
         case .eraser:
             eraserCursorPosition = nil
             viewModel.commitChange()
-            
+
         case .text:
             textInputPosition = location
             showTextInput = true
-            
+
         case .sticker:
             let element = DrawingElement(
                 type: .sticker,
@@ -155,7 +194,7 @@ struct DrawingCanvas: View {
                 strokeWidth: 4
             )
             viewModel.addElement(element)
-            
+
         case .rectangle:
             if currentPath.count >= 2 {
                 let start = currentPath.first!
@@ -171,7 +210,7 @@ struct DrawingCanvas: View {
                 )
                 viewModel.addElement(element)
             }
-            
+
         case .circle:
             if currentPath.count >= 2 {
                 let start = currentPath.first!
@@ -187,7 +226,7 @@ struct DrawingCanvas: View {
                 )
                 viewModel.addElement(element)
             }
-            
+
         case .line:
             if currentPath.count >= 2 {
                 let element = DrawingElement(
@@ -198,7 +237,7 @@ struct DrawingCanvas: View {
                 )
                 viewModel.addElement(element)
             }
-            
+
         case .pen, .marker:
             if !currentPath.isEmpty {
                 let element = DrawingElement(
@@ -210,12 +249,26 @@ struct DrawingCanvas: View {
                 )
                 viewModel.addElement(element)
             }
-            
+
         default:
             break
         }
-        
+
         currentPath = []
+    }
+
+    private func cancelActiveCanvasInteraction() {
+        currentPath = []
+        eraserCursorPosition = nil
+
+        if let original = selectionDragOriginal, selectionDidMove {
+            viewModel.updateElement(original)
+            viewModel.selectedElement = original
+        }
+
+        selectionDragOriginal = nil
+        selectionDidMove = false
+        viewModel.isDrawing = false
     }
     
     // MARK: - Drawing Functions
@@ -224,6 +277,15 @@ struct DrawingCanvas: View {
         
         switch element.type {
         case .pen, .marker:
+            if element.points.count == 1 {
+                let point = element.points[0]
+                let r = element.strokeWidth / 2
+                context.fill(
+                    Path(ellipseIn: CGRect(x: point.x - r, y: point.y - r, width: r * 2, height: r * 2)),
+                    with: .color(color.opacity(element.opacity))
+                )
+                return
+            }
             guard element.points.count > 1 else { return }
             
             var path = Path()
@@ -311,6 +373,16 @@ struct DrawingCanvas: View {
         
         switch viewModel.tool {
         case .pen, .marker:
+            if points.count == 1 {
+                let point = points[0]
+                let r = viewModel.strokeWidth / 2
+                context.fill(
+                    Path(ellipseIn: CGRect(x: point.x - r, y: point.y - r, width: r * 2, height: r * 2)),
+                    with: .color(color.opacity(viewModel.tool == .marker ? 0.4 : 1.0))
+                )
+                return
+            }
+            
             var path = Path()
             path.move(to: points[0])
             for point in points.dropFirst() {
@@ -375,24 +447,35 @@ struct DrawingCanvas: View {
     }
     
     // MARK: - Helper Functions
+    private func topmostElement(at point: CGPoint) -> DrawingElement? {
+        viewModel.elements.reversed().first { element in
+            !element.isDeleted && hitTest(point, for: element)
+        }
+    }
+
     private func hitTest(_ point: CGPoint, for element: DrawingElement) -> Bool {
         let threshold: CGFloat = 20
         
         // Fast-path: Bounding box check first
-        let rect = CGRect(x: element.x - threshold/2, y: element.y - threshold/2,
-                          width: element.width + threshold, height: element.height + threshold)
+        let rect = element.selectionBounds.insetBy(dx: -threshold, dy: -threshold)
         guard rect.contains(point) else { return false }
         
         // Precise-path: Point/Path check
         switch element.type {
         case .pen, .marker, .line:
             // Check if point is near any segment of the path
-            for i in 0..<element.points.count - 1 {
-                let start = element.points[i]
-                let end = element.points[i + 1]
-                if distanceToLineSegment(point: point, start: start, end: end) < threshold {
-                    return true
+            if element.points.count > 1 {
+                for i in 0..<element.points.count - 1 {
+                    let start = element.points[i]
+                    let end = element.points[i + 1]
+                    if distanceToLineSegment(point: point, start: start, end: end) < threshold + (element.strokeWidth / 2) {
+                        return true
+                    }
                 }
+            } else if let firstPoint = element.points.first {
+                // Check if near single point (dot)
+                let distance = hypot(firstPoint.x - point.x, firstPoint.y - point.y)
+                return distance < threshold + (element.strokeWidth / 2)
             }
             return false
             
@@ -415,6 +498,14 @@ struct DrawingCanvas: View {
         
         return hypot(point.x - projection.x, point.y - projection.y)
     }
+
+    private func movedElement(_ element: DrawingElement, by offset: CGSize) -> DrawingElement {
+        var modified = element
+        modified.x += offset.width
+        modified.y += offset.height
+        modified.points = modified.points.map { CGPoint(x: $0.x + offset.width, y: $0.y + offset.height) }
+        return modified
+    }
     
     private func eraseAt(_ point: CGPoint) {
         let eraserRadius = viewModel.eraserSize / 2
@@ -429,7 +520,10 @@ struct DrawingCanvas: View {
             if updatedElements[i].isDeleted { continue }
             
             let element = updatedElements[i]
-            let rect = CGRect(x: element.x, y: element.y, width: element.width, height: element.height)
+            // Expand bounding box by stroke width to ensure we can hit the edges of thick lines
+            let strokeBuffer = element.strokeWidth / 2
+            let rect = CGRect(x: element.x - strokeBuffer, y: element.y - strokeBuffer,
+                            width: element.width + element.strokeWidth, height: element.height + element.strokeWidth)
             
             // Fast filter: Bounding box check
             guard rect.intersects(eraserRect) else { continue }
@@ -438,16 +532,35 @@ struct DrawingCanvas: View {
             let shouldDelete: Bool
             switch element.type {
             case .pen, .marker, .line:
-                shouldDelete = element.points.contains { p in
-                    hypot(p.x - point.x, p.y - point.y) < eraserRadius
+                // Check if eraser is near any segment of the path
+                var foundMatch = false
+                if element.points.count > 1 {
+                    for j in 0..<element.points.count - 1 {
+                        let distance = distanceToLineSegment(point: point, start: element.points[j], end: element.points[j+1])
+                        // Use segment distance check for precise erasing
+                        if distance < eraserRadius + strokeBuffer {
+                            foundMatch = true
+                            break
+                        }
+                    }
+                } else if let firstPoint = element.points.first {
+                    // Single point fallback
+                    let distance = hypot(firstPoint.x - point.x, firstPoint.y - point.y)
+                    foundMatch = distance < eraserRadius + strokeBuffer
                 }
+                shouldDelete = foundMatch
+                
             default:
-                shouldDelete = true // Bounds intersection is enough for text/stickers/shapes
+                // For text, stickers, images, and shapes, bounding box intersection is generally enough
+                // but we add a small 5pt buffer for a more "forgiving" feel
+                shouldDelete = rect.insetBy(dx: -5, dy: -5).intersects(eraserRect)
             }
             
             if shouldDelete {
                 updatedElements[i].isDeleted = true
                 elementsChanged = true
+                // HIG: Provide subtle haptic feedback when an element is successfully erased
+                viewModel.triggerHaptic(.impact)
             }
         }
         
@@ -482,55 +595,139 @@ struct DrawingCanvas: View {
     }
 }
 
+fileprivate extension DrawingElement {
+    var selectionBounds: CGRect {
+        let minimumSize: CGFloat = 40
+
+        switch type {
+        case .pen, .marker, .line:
+            guard !points.isEmpty else {
+                return CGRect(x: x, y: y, width: minimumSize, height: minimumSize)
+            }
+
+            let minX = points.map(\.x).min() ?? x
+            let minY = points.map(\.y).min() ?? y
+            let maxX = points.map(\.x).max() ?? x
+            let maxY = points.map(\.y).max() ?? y
+            let strokePadding = max(strokeWidth, 8)
+            return CGRect(
+                x: minX,
+                y: minY,
+                width: max(maxX - minX, minimumSize),
+                height: max(maxY - minY, minimumSize)
+            )
+            .insetBy(dx: -strokePadding, dy: -strokePadding)
+
+        case .sticker:
+            let side = max(width, height, strokeWidth * 10, 44)
+            return CGRect(x: x - side / 2, y: y - side / 2, width: side, height: side)
+
+        case .text:
+            let fontSize = max(strokeWidth * 8, 18)
+            let textWidth = max(CGFloat(text?.count ?? 1) * fontSize * 0.56, minimumSize)
+            return CGRect(x: x, y: y, width: max(width, textWidth), height: max(height, fontSize * 1.35))
+
+        default:
+            return CGRect(x: x, y: y, width: max(width, minimumSize), height: max(height, minimumSize))
+        }
+    }
+
+    func resized(from oldBounds: CGRect, to newBounds: CGRect) -> DrawingElement {
+        var modified = self
+        let oldWidth = max(oldBounds.width, 1)
+        let oldHeight = max(oldBounds.height, 1)
+
+        switch type {
+        case .pen, .marker, .line:
+            modified.points = points.map { point in
+                let xProgress = (point.x - oldBounds.minX) / oldWidth
+                let yProgress = (point.y - oldBounds.minY) / oldHeight
+                return CGPoint(
+                    x: newBounds.minX + xProgress * newBounds.width,
+                    y: newBounds.minY + yProgress * newBounds.height
+                )
+            }
+            modified.x = newBounds.minX
+            modified.y = newBounds.minY
+            modified.width = newBounds.width
+            modified.height = newBounds.height
+
+        case .sticker:
+            modified.x = newBounds.midX
+            modified.y = newBounds.midY
+            modified.width = newBounds.width
+            modified.height = newBounds.height
+            modified.strokeWidth = max(2, min(newBounds.width, newBounds.height) / 10)
+
+        case .text:
+            modified.x = newBounds.minX
+            modified.y = newBounds.minY
+            modified.width = newBounds.width
+            modified.height = newBounds.height
+            modified.strokeWidth = max(1.5, newBounds.height / 8)
+
+        default:
+            modified.x = newBounds.minX
+            modified.y = newBounds.minY
+            modified.width = newBounds.width
+            modified.height = newBounds.height
+        }
+
+        return modified
+    }
+}
+
 // MARK: - Selection Overlay
 struct SelectionOverlay: View {
     let element: DrawingElement
     @ObservedObject var viewModel: CanvasViewModel
     
-    @State private var isDragging = false
-    @GestureState private var dragOffset: CGSize = .zero
+    @State private var resizeOriginal: DrawingElement?
     
     var body: some View {
         GeometryReader { _ in
             let bounds = elementBounds
-            
+
             ZStack {
                 // Selection rectangle
-                Rectangle()
-                    .stroke(Color.blue, style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(AppTheme.accent.opacity(0.9), style: StrokeStyle(lineWidth: 1.6, dash: [6, 4]))
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(AppTheme.accent.opacity(0.035))
+                    )
                     .frame(width: bounds.width + 20, height: bounds.height + 20)
-                    .position(x: bounds.midX + dragOffset.width, y: bounds.midY + dragOffset.height)
-                
+                    .position(x: bounds.midX, y: bounds.midY)
+                    .allowsHitTesting(false)
+
                 // Resize handles
                 ForEach(HandlePosition.allCases, id: \.self) { position in
                     ResizeHandle(position: position)
                         .position(handlePosition(for: position, in: bounds))
+                        .gesture(resizeGesture(for: position))
                 }
-                
+
                 // Delete button
                 Button(action: viewModel.deleteSelectedElement) {
                     Image(systemName: "trash.fill")
                         .font(.system(size: 14))
                         .foregroundStyle(.white)
-                        .frame(width: 28, height: 28)
-                        .background(Color.red, in: Circle())
+                        .frame(width: 34, height: 34)
+                        .background(Color.red.opacity(0.92), in: Circle())
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
                 }
-                .position(x: bounds.maxX + 20, y: bounds.minY - 20)
+                .accessibilityLabel("Delete selected element")
+                .accessibilityHint("Removes the selected drawing element from the canvas")
+                .position(x: bounds.maxX + 24, y: bounds.minY - 24)
             }
-            .gesture(
-                DragGesture()
-                    .updating($dragOffset) { value, state, _ in
-                        state = value.translation
-                    }
-                    .onEnded { value in
-                        moveElement(by: value.translation)
-                    }
-            )
+            .accessibilityLabel("Selected element")
+            .accessibilityHint("Drag the element to move it, drag corner handles to resize it, or tap delete to remove it")
         }
     }
     
     private var elementBounds: CGRect {
-        CGRect(x: element.x, y: element.y, width: max(element.width, 40), height: max(element.height, 40))
+        element.selectionBounds
     }
     
     private func handlePosition(for position: HandlePosition, in bounds: CGRect) -> CGPoint {
@@ -541,15 +738,72 @@ struct SelectionOverlay: View {
         case .bottomRight: return CGPoint(x: bounds.maxX + 10, y: bounds.maxY + 10)
         }
     }
-    
-    private func moveElement(by offset: CGSize) {
-        guard var modified = viewModel.elements.first(where: { $0.id == element.id }) else { return }
-        modified.x += offset.width
-        modified.y += offset.height
-        modified.points = modified.points.map { CGPoint(x: $0.x + offset.width, y: $0.y + offset.height) }
-        viewModel.updateElement(modified)
-        viewModel.commitChange()
-        viewModel.selectedElement = modified
+
+    private func resizeGesture(for position: HandlePosition) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if resizeOriginal == nil {
+                    resizeOriginal = element
+                }
+                guard let original = resizeOriginal else { return }
+                let resized = resizedElement(original, from: position, by: value.translation)
+                viewModel.updateElement(resized)
+                viewModel.selectedElement = resized
+            }
+            .onEnded { _ in
+                viewModel.commitChange(description: "Element resized")
+                resizeOriginal = nil
+            }
+    }
+
+    private func resizedElement(_ element: DrawingElement, from handle: HandlePosition, by translation: CGSize) -> DrawingElement {
+        let originalBounds = element.selectionBounds
+        let minSize: CGFloat = 28
+        var newBounds = originalBounds
+
+        switch handle {
+        case .topLeft:
+            newBounds.origin.x += translation.width
+            newBounds.origin.y += translation.height
+            newBounds.size.width -= translation.width
+            newBounds.size.height -= translation.height
+            if newBounds.width < minSize {
+                newBounds.origin.x = originalBounds.maxX - minSize
+                newBounds.size.width = minSize
+            }
+            if newBounds.height < minSize {
+                newBounds.origin.y = originalBounds.maxY - minSize
+                newBounds.size.height = minSize
+            }
+
+        case .topRight:
+            newBounds.origin.y += translation.height
+            newBounds.size.width += translation.width
+            newBounds.size.height -= translation.height
+            newBounds.size.width = max(minSize, newBounds.width)
+            if newBounds.height < minSize {
+                newBounds.origin.y = originalBounds.maxY - minSize
+                newBounds.size.height = minSize
+            }
+
+        case .bottomLeft:
+            newBounds.origin.x += translation.width
+            newBounds.size.width -= translation.width
+            newBounds.size.height += translation.height
+            if newBounds.width < minSize {
+                newBounds.origin.x = originalBounds.maxX - minSize
+                newBounds.size.width = minSize
+            }
+            newBounds.size.height = max(minSize, newBounds.height)
+
+        case .bottomRight:
+            newBounds.size.width += translation.width
+            newBounds.size.height += translation.height
+            newBounds.size.width = max(minSize, newBounds.width)
+            newBounds.size.height = max(minSize, newBounds.height)
+        }
+
+        return element.resized(from: originalBounds, to: newBounds)
     }
 }
 
@@ -559,12 +813,42 @@ enum HandlePosition: CaseIterable {
 
 struct ResizeHandle: View {
     let position: HandlePosition
-    
+
+    private var accessibilityLabel: String {
+        switch position {
+        case .topLeft: return "Resize handle, top left corner"
+        case .topRight: return "Resize handle, top right corner"
+        case .bottomLeft: return "Resize handle, bottom left corner"
+        case .bottomRight: return "Resize handle, bottom right corner"
+        }
+    }
+
+    private var accessibilityHint: String {
+        switch position {
+        case .topLeft: return "Drag to resize from top left"
+        case .topRight: return "Drag to resize from top right"
+        case .bottomLeft: return "Drag to resize from bottom left"
+        case .bottomRight: return "Drag to resize from bottom right"
+        }
+    }
+
     var body: some View {
-        Circle()
-            .fill(Color.white)
-            .frame(width: 12, height: 12)
-            .overlay(Circle().stroke(Color.blue, lineWidth: 2))
+        ZStack {
+            Circle()
+                .fill(.ultraThinMaterial)
+                .frame(width: 28, height: 28)
+                .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
+
+            Circle()
+                .fill(Color.white.opacity(0.96))
+                .frame(width: 18, height: 18)
+                .overlay(Circle().stroke(AppTheme.accent, lineWidth: 2))
+        }
+        .frame(width: 44, height: 44)
+        .contentShape(Circle())
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(accessibilityHint)
+        .accessibilityAddTraits(.allowsDirectInteraction)
     }
 }
 
@@ -595,14 +879,16 @@ struct TextInputOverlay: View {
             // Semi-transparent overlay to indicate text mode is active
             Color.black.opacity(0.1)
                 .ignoresSafeArea()
-                .onTapGesture { 
+                .accessibilityLabel("Text input background")
+                .accessibilityHint("Tap outside the text field to commit or cancel")
+                .onTapGesture {
                     if !text.isEmpty {
                         onCommit()
                     } else {
                         onCancel()
                     }
                 }
-            
+
             // Inline text input at tap location
             VStack(alignment: .leading, spacing: 0) {
                 // Text input field
@@ -618,9 +904,11 @@ struct TextInputOverlay: View {
                     .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.blue, lineWidth: 2)
+                            .stroke(AppTheme.accent, lineWidth: 2)
                     )
-                
+                    .accessibilityLabel("Text input field")
+                    .accessibilityHint("Enter your text here, then tap the checkmark to add it to the canvas")
+
                 // Action buttons
                 HStack(spacing: 8) {
                     Button(action: onCancel) {
@@ -628,16 +916,17 @@ struct TextInputOverlay: View {
                             .font(.system(size: 24))
                             .foregroundStyle(.red, .white)
                     }
-                    .accessibilityLabel("Cancel")
-                    
+                    .accessibilityLabel("Cancel text input")
+                    .accessibilityHint("Tap to discard the text and close the input")
+
                     Spacer()
-                    
+
                     Text("Tap outside to add")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    
+
                     Spacer()
-                    
+
                     Button(action: onCommit) {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.system(size: 24))
@@ -645,7 +934,8 @@ struct TextInputOverlay: View {
                     }
                     .disabled(text.isEmpty)
                     .opacity(text.isEmpty ? 0.5 : 1.0)
-                    .accessibilityLabel("Add text")
+                    .accessibilityLabel("Add text to canvas")
+                    .accessibilityHint("Tap to add the entered text to the canvas")
                 }
                 .padding(.top, 8)
                 .padding(.horizontal, 4)
@@ -654,24 +944,28 @@ struct TextInputOverlay: View {
             .background(.ultraThinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 16))
             .shadow(color: .black.opacity(0.2), radius: 12, y: 6)
-            // Smart positioning to keep on screen (now using 10,000x10,000 bounds)
+            // Smart positioning to keep on screen (4000x4000 bounds)
             .position(
-                x: min(max(localPosition.x, 150), 9850),
-                y: min(max(localPosition.y - 60, 100), 9900)
+                x: min(max(localPosition.x, 150), 3850),
+                y: min(max(localPosition.y - 60, 100), 3900)
             )
         }
+        .accessibilityLabel("Text input overlay")
         .ignoresSafeArea()
         .onAppear { 
             isFocused = true
             // Adjust position if too close to edges
             localPosition = CGPoint(
-                x: min(max(position.x, 150), 9850),
-                y: min(max(position.y, 150), 9850)
+                x: min(max(position.x, 150), 3850),
+                y: min(max(position.y, 150), 3850)
             )
         }
     }
 }
 
 #Preview {
-    DrawingCanvas(viewModel: CanvasViewModel())
+    DrawingCanvas(
+        viewModel: CanvasViewModel(),
+        isCanvasTransformGestureActive: false
+    )
 }

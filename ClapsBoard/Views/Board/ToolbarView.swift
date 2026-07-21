@@ -2,125 +2,226 @@
 //  ToolbarView.swift
 //  ClapsBoard
 //
-//  Bottom toolbar with drawing tools and quick actions
+//  Quiet bottom toolbar for canvas-first drawing
 //
 
 import SwiftUI
-import UniformTypeIdentifiers
+import UIKit
 
-/// Bottom toolbar with drawing tools (HIG: Gestures & Touch, Accessibility)
+enum BoardControlOrientation {
+    case horizontal
+    case vertical
+}
+
 struct ToolbarView: View {
     @ObservedObject var viewModel: CanvasViewModel
-    
-    // HIG: Reduce Motion support
+    var orientation: BoardControlOrientation = .horizontal
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    
-    private let mainTools: [ToolType] = [.pan, .select, .pen, .marker, .eraser, .rectangle, .circle, .line, .sticker]
-    
-    var body: some View {
-        VStack(spacing: 8) {
-            // Undo/Redo Bar
-            HStack(spacing: 12) {
-                Button(action: viewModel.undo) {
-                    Image(systemName: "arrow.uturn.backward")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(viewModel.canUndo ? .primary : .tertiary)
-                }
-                .disabled(!viewModel.canUndo)
-                
-                Button(action: viewModel.redo) {
-                    Image(systemName: "arrow.uturn.forward")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(viewModel.canRedo ? .primary : .tertiary)
-                }
-                .disabled(!viewModel.canRedo)
-                
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: Capsule())
-            
-            // Main Tools
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) { // Increased spacing
-                    ForEach(mainTools, id: \.self) { tool in
-                        ToolButton(
-                            tool: tool,
-                            isSelected: viewModel.tool == tool,
-                            reduceMotion: reduceMotion,
-                            action: {
-                                // HIG: Respect Reduce Motion accessibility setting
-                                if reduceMotion {
-                                    if viewModel.tool == tool {
-                                        viewModel.showProperties.toggle()
-                                    } else {
-                                        viewModel.tool = tool
-                                        viewModel.showProperties = true
-                                    }
-                                } else {
-                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                        if viewModel.tool == tool {
-                                            viewModel.showProperties.toggle()
-                                        } else {
-                                            viewModel.tool = tool
-                                            viewModel.showProperties = true
-                                        }
-                                    }
-                                }
-                            }
-                        )
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            }
-            .background(.ultraThinMaterial, in: Capsule())
-            .shadow(color: .black.opacity(0.1), radius: 10, y: 5)
-        }
-        .padding(.horizontal, 16)
-    }
-}
 
-// MARK: - Tool Button
-/// Individual tool button with accessibility support (HIG: Accessibility)
-struct ToolButton: View {
-    let tool: ToolType
-    let isSelected: Bool
-    let reduceMotion: Bool
-    let action: () -> Void
-    
+    private let feedback = UIImpactFeedbackGenerator(style: .light)
+
     var body: some View {
-        Button(action: action) {
-            VStack(spacing: 2) {
-                Image(systemName: tool.iconName)
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(isSelected ? .white : .primary.opacity(0.7))
-                    .frame(width: 44, height: 36)
-                
-                Text(tool.rawValue)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(isSelected ? .white : .primary.opacity(0.7))
+        Group {
+            if orientation == .vertical {
+                VStack(spacing: 6) {
+                    toolbarItems
+                }
+            } else {
+                HStack(spacing: 6) {
+                    toolbarItems
+                }
             }
-            .padding(.vertical, 4)
-            .padding(.horizontal, 8)
-            .background(
-                isSelected ? Color.blue : Color.gray.opacity(0.1),
-                in: RoundedRectangle(cornerRadius: 12)
+        }
+        .padding(.horizontal, orientation == .vertical ? 6 : 8)
+        .padding(.vertical, orientation == .vertical ? 8 : 6)
+        .background {
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .opacity(0.82)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.07), radius: 18, y: 8)
+        .opacity(viewModel.isDrawing ? 0.34 : 1)
+        .blur(radius: viewModel.isDrawing ? 0.7 : 0)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: viewModel.isDrawing)
+    }
+
+    @ViewBuilder
+    private var toolbarItems: some View {
+        ToolbarIconButton(
+            icon: "arrow.uturn.backward",
+            isEnabled: viewModel.canUndo,
+            action: performUndo
+        )
+
+        ToolbarIconButton(
+            icon: "arrow.uturn.forward",
+            isEnabled: viewModel.canRedo,
+            action: performRedo
+        )
+
+        ToolbarIconButton(
+            icon: "hand.raised",
+            isSelected: viewModel.tool == .pan,
+            action: { selectTool(.pan) }
+        )
+
+        ToolbarIconButton(
+            icon: "pencil",
+            isSelected: viewModel.tool == .pen,
+            action: { selectTool(.pen) }
+        )
+
+        if viewModel.tool.supportsProperties {
+            ToolbarIconButton(
+                icon: "slider.horizontal.3",
+                isSelected: viewModel.showProperties,
+                action: toggleProperties
             )
         }
-        .buttonStyle(.plain)
-        // HIG: Accessibility labels for VoiceOver support
-        .accessibilityLabel(tool.accessibilityLabel)
-        .accessibilityHint(isSelected ? "Selected. Double tap to toggle properties panel." : "Double tap to select this tool.")
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
+
+        ToolOverflowMenu(viewModel: viewModel, selectTool: selectTool)
+    }
+
+    private func selectTool(_ tool: ToolType) {
+        feedback.impactOccurred()
+        if viewModel.tool == tool {
+            viewModel.showProperties = tool.supportsProperties ? !viewModel.showProperties : false
+        } else {
+            viewModel.tool = tool
+            viewModel.showProperties = tool.supportsProperties
+        }
+    }
+
+    private func toggleProperties() {
+        guard viewModel.tool.supportsProperties else { return }
+        feedback.impactOccurred()
+        viewModel.showProperties.toggle()
+    }
+
+    private func performUndo() {
+        guard viewModel.canUndo else { return }
+        feedback.impactOccurred()
+        viewModel.undo()
+    }
+
+    private func performRedo() {
+        guard viewModel.canRedo else { return }
+        feedback.impactOccurred()
+        viewModel.redo()
     }
 }
 
-// MARK: - Preview
+private struct ToolOverflowMenu: View {
+    @ObservedObject var viewModel: CanvasViewModel
+    let selectTool: (ToolType) -> Void
+
+    private let secondaryTools: [ToolType] = [
+        .select,
+        .marker,
+        .eraser,
+        .text,
+        .rectangle,
+        .circle,
+        .line,
+        .sticker
+    ]
+
+    var body: some View {
+        Menu {
+            ForEach(secondaryTools, id: \.self) { tool in
+                Button {
+                    selectTool(tool)
+                } label: {
+                    Label(tool.displayName, systemImage: tool.iconName)
+                }
+            }
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(isSecondaryToolActive ? AppTheme.accentSoft : Color.primary.opacity(0.045))
+                    .frame(width: 42, height: 42)
+
+                Image(systemName: "plus")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(AppTheme.accent)
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+        }
+        .accessibilityLabel("More tools")
+        .accessibilityHint("Opens additional drawing tools")
+    }
+
+    private var isSecondaryToolActive: Bool {
+        secondaryTools.contains(viewModel.tool)
+    }
+}
+
+private struct ToolbarIconButton: View {
+    let icon: String
+    var isSelected: Bool = false
+    var isEnabled: Bool = true
+    let action: () -> Void
+
+    @State private var isPressed = false
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(isSelected ? AppTheme.accentSoft : Color.clear)
+                    .frame(width: 42, height: 42)
+
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: isSelected ? .semibold : .medium))
+                    .foregroundStyle(isSelected ? AppTheme.accent : (isEnabled ? Color.primary.opacity(0.82) : Color.secondary.opacity(0.7)))
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+            .scaleEffect(isPressed ? 0.94 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.28)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(accessibilityHint)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { _ in isPressed = false }
+        )
+    }
+
+    private var accessibilityLabel: String {
+        switch icon {
+        case "arrow.uturn.backward": return "Undo"
+        case "arrow.uturn.forward": return "Redo"
+        case "hand.raised": return "Pan tool"
+        case "pencil": return "Pencil tool"
+        case "slider.horizontal.3": return "Tool adjustments"
+        default: return icon
+        }
+    }
+
+    private var accessibilityHint: String {
+        switch icon {
+        case "arrow.uturn.backward": return "Tap to undo last action"
+        case "arrow.uturn.forward": return "Tap to redo last action"
+        case "hand.raised": return "Tap to pan the canvas"
+        case "pencil": return "Tap to draw with pencil"
+        case "slider.horizontal.3": return "Shows or hides settings for the selected tool"
+        default: return "Tap to use this control"
+        }
+    }
+}
+
 #Preview {
     VStack {
         Spacer()
         ToolbarView(viewModel: CanvasViewModel())
+            .padding(.bottom, 24)
     }
-    .background(Color.gray.opacity(0.3))
+    .background(AppTheme.canvasBase)
 }

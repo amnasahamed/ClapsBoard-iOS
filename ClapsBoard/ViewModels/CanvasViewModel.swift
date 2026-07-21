@@ -27,8 +27,9 @@ class CanvasViewModel: ObservableObject {
     @Published var eraserSize: CGFloat = DrawingConstants.eraserSize
     @Published var textAlign: TextAlignment = .left
     @Published var currentSticker: String = DrawingConstants.stickers[0]
-    @Published var showGrid: Bool = true
-    @Published var showProperties: Bool = true
+    @Published var gridStyle: GridStyle = .none
+    @Published var showProperties: Bool = false
+    @Published var isDrawing: Bool = false
     
     // MARK: - Elements
     @Published var elements: [DrawingElement] = []
@@ -41,9 +42,22 @@ class CanvasViewModel: ObservableObject {
     // MARK: - History for Undo/Redo
     private var history: [[DrawingElement]] = [[]]
     private var historyIndex: Int = 0
-    
+    private var historyDescriptions: [String] = ["Initial state"]
+
     var canUndo: Bool { historyIndex > 0 }
     var canRedo: Bool { historyIndex < history.count - 1 }
+
+    /// Description of the action that will be undone
+    var undoDescription: String? {
+        guard historyIndex > 0 else { return nil }
+        return historyDescriptions[historyIndex]
+    }
+
+    /// Description of the action that will be redone
+    var redoDescription: String? {
+        guard historyIndex < history.count - 1 else { return nil }
+        return historyDescriptions[historyIndex + 1]
+    }
     
     // MARK: - Haptic Feedback (HIG: Feedback & States)
     private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
@@ -85,22 +99,47 @@ class CanvasViewModel: ObservableObject {
     
     // MARK: - History Management
     func commitChange() {
+        commitChange(description: generateActionDescription())
+    }
+
+    func commitChange(description: String) {
         // Remove any redo history
         if historyIndex < history.count - 1 {
             history = Array(history.prefix(historyIndex + 1))
+            historyDescriptions = Array(historyDescriptions.prefix(historyIndex + 1))
         }
-        
-        // Add current state
+
+        // Add current state with description
         history.append(elements)
+        historyDescriptions.append(description)
         historyIndex = history.count - 1
-        
+
         // Limit history size
         if history.count > 50 {
             history.removeFirst()
+            historyDescriptions.removeFirst()
             historyIndex -= 1
         }
-        
+
         saveElements()
+    }
+
+    /// Generates a human-readable description for the current action based on recent changes
+    private func generateActionDescription() -> String {
+        guard historyIndex > 0 else { return "Initial state" }
+
+        // Compare current elements with previous state to determine action type
+        let previousElements = history[historyIndex]
+        let currentCount = elements.count
+        let previousCount = previousElements.count
+
+        if currentCount > previousCount {
+            return "Drawing added"
+        } else if currentCount < previousCount {
+            return "Element deleted"
+        } else {
+            return "Element modified"
+        }
     }
     
     func undo() {
@@ -129,6 +168,26 @@ class CanvasViewModel: ObservableObject {
         commitChange()
         // HIG: Haptic feedback for destructive clear action
         notificationFeedback.notificationOccurred(.warning)
+    }
+    
+    /// Triggers haptic feedback for UI interactions
+    func triggerHaptic(_ style: FeedbackStyle) {
+        switch style {
+        case .impact:
+            impactFeedback.impactOccurred()
+        case .selection:
+            selectionFeedback.selectionChanged()
+        case .success:
+            notificationFeedback.notificationOccurred(.success)
+        case .warning:
+            notificationFeedback.notificationOccurred(.warning)
+        case .error:
+            notificationFeedback.notificationOccurred(.error)
+        }
+    }
+    
+    enum FeedbackStyle {
+        case impact, selection, success, warning, error
     }
     
     // MARK: - Persistence
@@ -219,67 +278,225 @@ class CanvasViewModel: ObservableObject {
         )
     }
     
-    /// Exports the canvas to an image
-    /// - Parameter customRect: Optional specific area to export. If nil, exports all content.
-    func exportImage(from customRect: CGRect? = nil) -> UIImage? {
-        // Determine export bounds
+    // MARK: - Export
+    
+    /// Exports the canvas to an image asynchronously (OPTIMIZED)
+    /// - Parameters:
+    ///   - customRect: Optional specific area to export. If nil, exports all content.
+    ///   - completion: Called on main thread with the exported image
+    func exportImageAsync(from customRect: CGRect? = nil, completion: @escaping (UIImage?) -> Void) {
+        // Capture all needed data on main thread
         let exportBounds: CGRect
         if let rect = customRect {
             exportBounds = rect
         } else {
-            // Default to content bounds or a standard size if empty
-            exportBounds = calculateContentBounds() ?? CGRect(x: 4000, y: 4000, width: 2000, height: 2000)
+            exportBounds = calculateContentBounds() ?? CGRect(x: 1500, y: 1500, width: 1000, height: 1000)
         }
         
-        // Ensure bounds are valid
-        guard exportBounds.width > 0, exportBounds.height > 0 else { return nil }
+        guard exportBounds.width > 0, exportBounds.height > 0 else {
+            completion(nil)
+            return
+        }
         
-        let renderer = UIGraphicsImageRenderer(size: exportBounds.size)
+        // Capture state before going to background thread
+        let elementsSnapshot = elements.filter { !$0.isDeleted }
+        let exportGridStyle = gridStyle
         
-        return renderer.image { context in
-            // Translate context so the exportBounds origin becomes (0,0)
-            context.cgContext.translateBy(x: -exportBounds.origin.x, y: -exportBounds.origin.y)
-            
-            // Draw white background
-            UIColor.white.setFill()
-            context.fill(exportBounds)
-            
-            // Draw grid if enabled (only if exporting visible area, otherwise usually clean export preferred)
-            // For clean export, we usually hide grid. But if user wants it:
-            if showGrid {
-                let gridSize: CGFloat = 40
-                let dotSize: CGFloat = 2
-                let gridColor = UIColor.systemGray3.withAlphaComponent(0.3)
-                gridColor.setFill()
-                
-                // Draw grid dots covering the export bounds
-                let startX = floor(exportBounds.minX / gridSize) * gridSize
-                let startY = floor(exportBounds.minY / gridSize) * gridSize
-                
-                for x in stride(from: startX, to: exportBounds.maxX, by: gridSize) {
-                    for y in stride(from: startY, to: exportBounds.maxY, by: gridSize) {
-                        // Draw a single dot in the center of the 40x40 tile
-                        let dotRect = CGRect(x: x + (gridSize - dotSize)/2, 
-                                           y: y + (gridSize - dotSize)/2, 
-                                           width: dotSize, 
-                                           height: dotSize)
-                        
-                        // Only draw if within export bounds
-                        if exportBounds.contains(dotRect.origin) {
-                            UIBezierPath(ovalIn: dotRect).fill()
-                        }
-                    }
-                }
+        // Preload all image data on main thread
+        var preloadedImages: [UUID: UIImage] = [:]
+        for element in elementsSnapshot where element.type == .image {
+            if let data = element.imageData, let image = UIImage(data: data) {
+                preloadedImages[element.id] = image
             }
+        }
+        
+        // Move heavy rendering to background thread
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let image = self?.renderExportImage(
+                bounds: exportBounds,
+                elements: elementsSnapshot,
+                gridStyle: exportGridStyle,
+                preloadedImages: preloadedImages
+            )
             
-            // Draw elements
-            for element in elements where !element.isDeleted {
-                drawElement(element, in: context.cgContext)
+            DispatchQueue.main.async {
+                completion(image)
             }
         }
     }
     
-    private func drawElement(_ element: DrawingElement, in context: CGContext) {
+    /// Synchronous export (for legacy compatibility) - OPTIMIZED
+    func exportImage(from customRect: CGRect? = nil) -> UIImage? {
+        let exportBounds: CGRect
+        if let rect = customRect {
+            exportBounds = rect
+        } else {
+            exportBounds = calculateContentBounds() ?? CGRect(x: 1500, y: 1500, width: 1000, height: 1000)
+        }
+        
+        guard exportBounds.width > 0, exportBounds.height > 0 else { return nil }
+        
+        let elementsSnapshot = elements.filter { !$0.isDeleted }
+        
+        // Preload images
+        var preloadedImages: [UUID: UIImage] = [:]
+        for element in elementsSnapshot where element.type == .image {
+            if let data = element.imageData, let image = UIImage(data: data) {
+                preloadedImages[element.id] = image
+            }
+        }
+        
+        return renderExportImage(
+            bounds: exportBounds,
+            elements: elementsSnapshot,
+            gridStyle: gridStyle,
+            preloadedImages: preloadedImages
+        )
+    }
+    
+    /// Core rendering logic - thread-safe
+    private func renderExportImage(
+        bounds: CGRect,
+        elements: [DrawingElement],
+        gridStyle: GridStyle,
+        preloadedImages: [UUID: UIImage]
+    ) -> UIImage? {
+        // Calculate the best scale to keep the image high quality but under sharing limits
+        // iOS share extensions often crash if the image is > 50MB (approx 4000x4000 pixels)
+        let screenScale = UIScreen.main.scale
+        let maxPixelSize: CGFloat = 4096 // Max 4k resolution for reliability
+        
+        let logicalWidth = bounds.width
+        let logicalHeight = bounds.height
+        let maxLogicalDim = max(logicalWidth, logicalHeight)
+        
+        // Target physical pixels = logicalDim * scale
+        var targetScale = screenScale
+        if maxLogicalDim * targetScale > maxPixelSize {
+            targetScale = maxPixelSize / maxLogicalDim
+        }
+        
+        let renderSize = CGSize(
+            width: logicalWidth,
+            height: logicalHeight
+        )
+        
+        let rendererFormat = UIGraphicsImageRendererFormat.default()
+        rendererFormat.opaque = true
+        rendererFormat.scale = targetScale // Explicitly control output resolution
+        
+        let renderer = UIGraphicsImageRenderer(size: renderSize, format: rendererFormat)
+        
+        return renderer.image { context in
+            // Apply translation to account for content bounds
+            context.cgContext.translateBy(x: -bounds.origin.x, y: -bounds.origin.y)
+            
+            // Draw white background
+            UIColor.white.setFill()
+            UIRectFill(bounds)
+            
+            // Draw grid using optimized tiled pattern (instead of individual dots)
+            if gridStyle.isVisible {
+                drawOptimizedGrid(in: context.cgContext, bounds: bounds, style: gridStyle)
+            }
+            
+            // Draw elements
+            for element in elements {
+                drawElementForExport(element, in: context.cgContext, preloadedImages: preloadedImages)
+            }
+        }
+    }
+    
+    /// Optimized grid drawing using CGPattern
+    private func drawOptimizedGrid(in context: CGContext, bounds: CGRect, style: GridStyle) {
+        let gridSize: CGFloat = 40
+        let dotSize: CGFloat = 2
+        
+        // Create a small tile image and use it as a pattern
+        let tileRenderer = UIGraphicsImageRenderer(size: CGSize(width: gridSize, height: gridSize))
+        let tileImage = tileRenderer.image { tileContext in
+            let cgContext = tileContext.cgContext
+            let gridColor = UIColor.systemGray3.withAlphaComponent(0.28)
+
+            switch style {
+            case .none:
+                break
+
+            case .dots:
+                gridColor.setFill()
+                let rect = CGRect(
+                    x: (gridSize - dotSize) / 2,
+                    y: (gridSize - dotSize) / 2,
+                    width: dotSize,
+                    height: dotSize
+                )
+                UIBezierPath(ovalIn: rect).fill()
+
+            case .lines:
+                gridColor.setStroke()
+                cgContext.setLineWidth(0.6)
+                cgContext.move(to: CGPoint(x: 0, y: 0))
+                cgContext.addLine(to: CGPoint(x: gridSize, y: 0))
+                cgContext.move(to: CGPoint(x: 0, y: 0))
+                cgContext.addLine(to: CGPoint(x: 0, y: gridSize))
+                cgContext.strokePath()
+
+            case .graph:
+                gridColor.setStroke()
+                cgContext.setLineWidth(0.55)
+                cgContext.move(to: CGPoint(x: 0, y: 0))
+                cgContext.addLine(to: CGPoint(x: gridSize, y: 0))
+                cgContext.move(to: CGPoint(x: 0, y: 0))
+                cgContext.addLine(to: CGPoint(x: 0, y: gridSize))
+                cgContext.strokePath()
+
+                UIColor.systemGray3.withAlphaComponent(0.42).setStroke()
+                cgContext.setLineWidth(1.0)
+                cgContext.stroke(CGRect(x: 0, y: 0, width: gridSize, height: gridSize))
+
+            case .isometric:
+                gridColor.setStroke()
+                cgContext.setLineWidth(0.55)
+                cgContext.move(to: CGPoint(x: 0, y: gridSize * 0.5))
+                cgContext.addLine(to: CGPoint(x: gridSize, y: 0))
+                cgContext.move(to: CGPoint(x: 0, y: 0))
+                cgContext.addLine(to: CGPoint(x: gridSize, y: gridSize * 0.5))
+                cgContext.move(to: CGPoint(x: 0, y: gridSize))
+                cgContext.addLine(to: CGPoint(x: gridSize, y: gridSize * 0.5))
+                cgContext.strokePath()
+            }
+        }
+        
+        // Draw the pattern
+        if let cgImage = tileImage.cgImage {
+            context.saveGState()
+            context.clip(to: bounds)
+            
+            // Calculate aligned start position
+            let startX = floor(bounds.minX / gridSize) * gridSize
+            let startY = floor(bounds.minY / gridSize) * gridSize
+            
+            // Draw tiled pattern
+            for x in stride(from: startX, to: bounds.maxX, by: gridSize) {
+                for y in stride(from: startY, to: bounds.maxY, by: gridSize) {
+                    let tileRect = CGRect(x: x, y: y, width: gridSize, height: gridSize)
+                    if bounds.intersects(tileRect) {
+                        // Flip context for UIImage->CGImage coordinate system
+                        context.saveGState()
+                        context.translateBy(x: x, y: y + gridSize)
+                        context.scaleBy(x: 1, y: -1)
+                        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: gridSize, height: gridSize))
+                        context.restoreGState()
+                    }
+                }
+            }
+            
+            context.restoreGState()
+        }
+    }
+    
+    /// Draw element for export - uses preloaded images for thread safety
+    private func drawElementForExport(_ element: DrawingElement, in context: CGContext, preloadedImages: [UUID: UIImage]) {
         context.saveGState()
         
         // Apply rotation if any
@@ -294,18 +511,36 @@ class CanvasViewModel: ObservableObject {
         
         switch element.type {
         case .pen, .marker:
-            guard element.points.count > 1 else { break }
-            
-            if element.type == .marker {
-                context.setAlpha(0.4)
+            if element.points.count == 1 {
+                let point = element.points[0]
+                let r = element.strokeWidth / 2
+                let rect = CGRect(x: point.x - r, y: point.y - r, width: r * 2, height: r * 2)
+                
+                if element.type == .marker {
+                    context.setAlpha(0.4)
+                }
+                
+                color.setFill()
+                let path = UIBezierPath(ovalIn: rect)
+                path.fill()
+                break
             }
-            
-            color.setStroke()
+            guard element.points.count > 1 else { break }
             let path = UIBezierPath()
             path.move(to: element.points[0])
             
-            for point in element.points.dropFirst() {
-                path.addLine(to: point)
+            // Use quadratic curves for smoother lines
+            if element.points.count > 2 {
+                for i in 1..<element.points.count {
+                    let mid = CGPoint(
+                        x: (element.points[i-1].x + element.points[i].x) / 2,
+                        y: (element.points[i-1].y + element.points[i].y) / 2
+                    )
+                    path.addQuadCurve(to: mid, controlPoint: element.points[i-1])
+                }
+                path.addLine(to: element.points.last!)
+            } else {
+                path.addLine(to: element.points[1])
             }
             
             path.lineWidth = element.strokeWidth
@@ -357,7 +592,8 @@ class CanvasViewModel: ObservableObject {
             }
             
         case .image:
-            if let data = element.imageData, let image = UIImage(data: data) {
+            // Use preloaded image for thread safety
+            if let image = preloadedImages[element.id] {
                 let rect = CGRect(x: element.x, y: element.y, width: element.width, height: element.height)
                 image.draw(in: rect)
             }
@@ -371,15 +607,15 @@ class CanvasViewModel: ObservableObject {
     
     /// Calculates the canvas coordinates for the current center of the screen
     func currentCanvasCenter(for screenSize: CGSize) -> CGPoint {
-        // The canvas is 10000x10000 and initialized centered in the view
+        // The canvas is 4000x4000 and initialized centered in the view
         // 1. Calculate how far we've panned relative to zoom
         let adjustedPanX = pan.x / zoom
         let adjustedPanY = pan.y / zoom
         
-        // 2. The center of the 10000x10000 space is 5000, 5000
+        // 2. The center of the 4000x4000 space is 2000, 2000
         // 3. Subtract the pan and adjust for screen size
-        let centerX = 5000 - adjustedPanX
-        let centerY = 5000 - adjustedPanY
+        let centerX = 2000 - adjustedPanX
+        let centerY = 2000 - adjustedPanY
         
         return CGPoint(x: centerX, y: centerY)
     }
@@ -448,6 +684,13 @@ class StorageService {
     func loadMedia(id: String) -> Data? {
         if let cached = imageCache[id] { return cached }
         let url = mediaDirectory.appendingPathComponent(id)
+        
+        // Check if file exists before attempting to read
+        guard fileManager.fileExists(atPath: url.path) else {
+            // Silently return nil - file may have been deleted or never saved
+            return nil
+        }
+        
         do {
             let data = try Data(contentsOf: url)
             imageCache[id] = data
@@ -462,7 +705,7 @@ class StorageService {
         DispatchQueue.global(qos: .background).async {
             do {
                 let data = try JSONEncoder().encode(elements)
-                try data.write(to: self.fileURL, options: [.atomic, .completeFileProtection])
+                try data.write(to: self.fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             } catch {
                 print("❌ Failed to save elements: \(error.localizedDescription)")
             }

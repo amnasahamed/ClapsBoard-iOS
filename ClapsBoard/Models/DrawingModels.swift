@@ -7,6 +7,43 @@
 
 import SwiftUI
 
+enum AppTheme {
+    static let accent = Color(hex: "6B8CFF")
+    static let accentSoft = Color(hex: "6B8CFF").opacity(0.14)
+    static let canvasBase = Color(hex: "FBFAF7")
+    static let canvasWarmth = Color(hex: "F1EEE7")
+}
+
+enum GridStyle: String, CaseIterable, Codable {
+    case none
+    case dots
+    case lines
+    case graph
+    case isometric
+
+    var title: String {
+        switch self {
+        case .none: return "Off"
+        case .dots: return "Dots"
+        case .lines: return "Lines"
+        case .graph: return "Graph"
+        case .isometric: return "Isometric"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .none: return "xmark"
+        case .dots: return "circle.grid.2x2"
+        case .lines: return "line.3.horizontal"
+        case .graph: return "grid"
+        case .isometric: return "cube"
+        }
+    }
+
+    var isVisible: Bool { self != .none }
+}
+
 // MARK: - Tool Types
 /// Drawing tool types with accessibility support (HIG: Accessibility)
 enum ToolType: String, CaseIterable, Codable {
@@ -37,7 +74,33 @@ enum ToolType: String, CaseIterable, Codable {
         case .image: return "photo"
         }
     }
-    
+
+    /// User-friendly display name for UI
+    var displayName: String {
+        switch self {
+        case .pan: return "Pan"
+        case .select: return "Select"
+        case .pen: return "Pen"
+        case .marker: return "Marker"
+        case .eraser: return "Eraser"
+        case .text: return "Text"
+        case .rectangle: return "Box"
+        case .circle: return "Circle"
+        case .line: return "Line"
+        case .sticker: return "Sticker"
+        case .image: return "Image"
+        }
+    }
+
+    var supportsProperties: Bool {
+        switch self {
+        case .pan, .select, .image:
+            return false
+        case .pen, .marker, .eraser, .text, .rectangle, .circle, .line, .sticker:
+            return true
+        }
+    }
+     
     /// HIG: Accessibility labels for VoiceOver users
     var accessibilityLabel: String {
         switch self {
@@ -167,7 +230,7 @@ struct DrawingConstants {
     static let colors: [Color] = [
         Color(hex: "1e293b"), // Black/Slate
         Color(hex: "ef4444"), // Red
-        Color(hex: "3b82f6"), // Blue
+        AppTheme.accent, // Periwinkle
         Color(hex: "22c55e"), // Green
         Color(hex: "eab308"), // Yellow
         Color(hex: "a855f7"), // Purple

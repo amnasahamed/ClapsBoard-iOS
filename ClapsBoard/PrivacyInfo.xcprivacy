@@ -20,23 +20,9 @@
     <key>NSPrivacyTrackingDomains</key>
     <array/>
     
-    <!-- NSPrivacyCollectedDataTypes: Types of data collected -->
+    <!-- NSPrivacyCollectedDataTypes: data collected by ClapsBoard or third parties (none) -->
     <key>NSPrivacyCollectedDataTypes</key>
-    <array>
-        <!-- Camera usage (for selfie mirror) -->
-        <dict>
-            <key>NSPrivacyCollectedDataType</key>
-            <string>NSPrivacyCollectedDataTypePhotosorVideos</string>
-            <key>NSPrivacyCollectedDataTypeLinked</key>
-            <false/>
-            <key>NSPrivacyCollectedDataTypeTracking</key>
-            <false/>
-            <key>NSPrivacyCollectedDataTypePurposes</key>
-            <array>
-                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
-            </array>
-        </dict>
-    </array>
+    <array/>
     
     <!-- NSPrivacyAccessedAPITypes: APIs that require a reason -->
     <key>NSPrivacyAccessedAPITypes</key>

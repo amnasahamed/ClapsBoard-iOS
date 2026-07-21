@@ -24,7 +24,51 @@
 		015 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 114 /* OnboardingView.swift */; };
 		016 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 115 /* SettingsView.swift */; };
 		017 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 200 /* Assets.xcassets */; };
+		018 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 302 /* PrivacyInfo.xcprivacy */; };
+		019 /* Diagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 116 /* Diagnostics.swift */; };
+		020 /* ClassCountdownAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 117 /* ClassCountdownAttributes.swift */; };
+		021 /* ClassCountdownLiveActivityCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118 /* ClassCountdownLiveActivityCoordinator.swift */; };
+		022 /* SampleBufferProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 119 /* SampleBufferProcessor.swift */; };
+		1588412695046131841E7BD4 /* VoiceChannelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC444DC5936E1171A96D5C74 /* VoiceChannelView.swift */; };
+		32DA4F5896FF1D23F67CCA95 /* AudioStreamManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25C04E2A9897DBCD3BF0C172 /* AudioStreamManager.swift */; };
+		480546DFA9A447D2499437FF /* VoiceChannelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FAB4CDA8DF69C0D96745488 /* VoiceChannelManager.swift */; };
+		LA001 /* ClassCountdownAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 117 /* ClassCountdownAttributes.swift */; };
+		LA002 /* ClapsBoardLiveActivitiesBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = LA100 /* ClapsBoardLiveActivitiesBundle.swift */; };
+		LA003 /* ClapsBoardLiveActivitiesExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = LA900 /* ClapsBoardLiveActivitiesExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		LA004 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = LA102 /* Assets.xcassets */; };
+		TESTBUILD /* ClapsBoardModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TESTFILE /* ClapsBoardModelTests.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		LA_PROXY /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = PROJECT /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = LA_TARGET;
+			remoteInfo = ClapsBoardLiveActivitiesExtension;
+		};
+		TESTPROXY /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = PROJECT /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = APP;
+			remoteInfo = ClapsBoard;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		LA_EMBED /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				LA003 /* ClapsBoardLiveActivitiesExtension.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		100 /* ClapsboardApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClapsboardApp.swift; sourceTree = "<group>"; };
@@ -43,14 +87,42 @@
 		113 /* DocumentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentsView.swift; sourceTree = "<group>"; };
 		114 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		115 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		116 /* Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Diagnostics.swift; sourceTree = "<group>"; };
+		117 /* ClassCountdownAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClassCountdownAttributes.swift; sourceTree = "<group>"; };
+		118 /* ClassCountdownLiveActivityCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClassCountdownLiveActivityCoordinator.swift; sourceTree = "<group>"; };
+		119 /* SampleBufferProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleBufferProcessor.swift; sourceTree = "<group>"; };
 		200 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		25C04E2A9897DBCD3BF0C172 /* AudioStreamManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AudioStreamManager.swift; path = ClapsBoard/Services/AudioStreamManager.swift; sourceTree = SOURCE_ROOT; };
 		300 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		301 /* ClapsBoard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ClapsBoard.entitlements; sourceTree = "<group>"; };
+		302 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		7FAB4CDA8DF69C0D96745488 /* VoiceChannelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VoiceChannelManager.swift; path = ClapsBoard/Services/VoiceChannelManager.swift; sourceTree = SOURCE_ROOT; };
 		900 /* ClapsBoard.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClapsBoard.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		EC444DC5936E1171A96D5C74 /* VoiceChannelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VoiceChannelView.swift; path = ClapsBoard/Views/VoIP/VoiceChannelView.swift; sourceTree = SOURCE_ROOT; };
+		LA100 /* ClapsBoardLiveActivitiesBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClapsBoardLiveActivitiesBundle.swift; sourceTree = "<group>"; };
+		LA101 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		LA102 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		LA900 /* ClapsBoardLiveActivitiesExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ClapsBoardLiveActivitiesExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		TESTFILE /* ClapsBoardModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClapsBoardModelTests.swift; sourceTree = "<group>"; };
+		TESTPRODUCT /* ClapsBoardTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClapsBoardTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		9001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		LAFW /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		TESTFW /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -64,7 +136,12 @@
 			isa = PBXGroup;
 			children = (
 				1000 /* ClapsBoard */,
+				LA_GROUP /* ClapsBoardLiveActivities */,
+				TESTGROUP /* ClapsBoardTests */,
 				9000 /* Products */,
+				7FAB4CDA8DF69C0D96745488 /* VoiceChannelManager.swift */,
+				25C04E2A9897DBCD3BF0C172 /* AudioStreamManager.swift */,
+				EC444DC5936E1171A96D5C74 /* VoiceChannelView.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -76,9 +153,13 @@
 				1001 /* Models */,
 				1002 /* ViewModels */,
 				1003 /* Views */,
+				1009 /* Utilities */,
+				1010 /* LiveActivities */,
+				1011 /* Services */,
 				200 /* Assets.xcassets */,
 				300 /* Info.plist */,
 				301 /* ClapsBoard.entitlements */,
+				302 /* PrivacyInfo.xcprivacy */,
 			);
 			path = ClapsBoard;
 			sourceTree = "<group>";
@@ -158,12 +239,57 @@
 			path = Common;
 			sourceTree = "<group>";
 		};
+		1009 /* Utilities */ = {
+			isa = PBXGroup;
+			children = (
+				116 /* Diagnostics.swift */,
+				119 /* SampleBufferProcessor.swift */,
+			);
+			path = Utilities;
+			sourceTree = "<group>";
+		};
+		1010 /* LiveActivities */ = {
+			isa = PBXGroup;
+			children = (
+				117 /* ClassCountdownAttributes.swift */,
+			);
+			path = LiveActivities;
+			sourceTree = "<group>";
+		};
+		1011 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				118 /* ClassCountdownLiveActivityCoordinator.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
 		9000 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				900 /* ClapsBoard.app */,
+				LA900 /* ClapsBoardLiveActivitiesExtension.appex */,
+				TESTPRODUCT /* ClapsBoardTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		LA_GROUP /* ClapsBoardLiveActivities */ = {
+			isa = PBXGroup;
+			children = (
+				LA100 /* ClapsBoardLiveActivitiesBundle.swift */,
+				LA101 /* Info.plist */,
+				LA102 /* Assets.xcassets */,
+			);
+			path = ClapsBoardLiveActivities;
+			sourceTree = "<group>";
+		};
+		TESTGROUP /* ClapsBoardTests */ = {
+			isa = PBXGroup;
+			children = (
+				TESTFILE /* ClapsBoardModelTests.swift */,
+			);
+			path = ClapsBoardTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -176,15 +302,51 @@
 				9002 /* Sources */,
 				9001 /* Frameworks */,
 				9003 /* Resources */,
+				LA_EMBED /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				LA_DEP /* PBXTargetDependency */,
 			);
 			name = ClapsBoard;
 			productName = ClapsBoard;
 			productReference = 900 /* ClapsBoard.app */;
 			productType = "com.apple.product-type.application";
+		};
+		LA_TARGET /* ClapsBoardLiveActivitiesExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = LA_CFGLIST /* Build configuration list for PBXNativeTarget "ClapsBoardLiveActivitiesExtension" */;
+			buildPhases = (
+				LASRC /* Sources */,
+				LAFW /* Frameworks */,
+				LARES /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ClapsBoardLiveActivitiesExtension;
+			productName = ClapsBoardLiveActivitiesExtension;
+			productReference = LA900 /* ClapsBoardLiveActivitiesExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		TESTS /* ClapsBoardTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = TESTCFGLIST /* Build configuration list for PBXNativeTarget "ClapsBoardTests" */;
+			buildPhases = (
+				TESTSRC /* Sources */,
+				TESTFW /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				TESTDEP /* PBXTargetDependency */,
+			);
+			name = ClapsBoardTests;
+			productName = ClapsBoardTests;
+			productReference = TESTPRODUCT /* ClapsBoardTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -194,10 +356,17 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1500;
-				LastUpgradeCheck = 1500;
+				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					APP = {
 						CreatedOnToolsVersion = 15.0;
+					};
+					LA_TARGET = {
+						CreatedOnToolsVersion = 26.5;
+					};
+					TESTS = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = APP;
 					};
 				};
 			};
@@ -215,6 +384,8 @@
 			projectRoot = "";
 			targets = (
 				APP /* ClapsBoard */,
+				LA_TARGET /* ClapsBoardLiveActivitiesExtension */,
+				TESTS /* ClapsBoardTests */,
 			);
 		};
 /* End PBXProject section */
@@ -225,6 +396,15 @@
 			buildActionMask = 2147483647;
 			files = (
 				017 /* Assets.xcassets in Resources */,
+				018 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		LARES /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				LA004 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -251,10 +431,47 @@
 				014 /* DocumentsView.swift in Sources */,
 				015 /* OnboardingView.swift in Sources */,
 				016 /* SettingsView.swift in Sources */,
+				019 /* Diagnostics.swift in Sources */,
+				022 /* SampleBufferProcessor.swift in Sources */,
+				020 /* ClassCountdownAttributes.swift in Sources */,
+				021 /* ClassCountdownLiveActivityCoordinator.swift in Sources */,
+				480546DFA9A447D2499437FF /* VoiceChannelManager.swift in Sources */,
+				32DA4F5896FF1D23F67CCA95 /* AudioStreamManager.swift in Sources */,
+				1588412695046131841E7BD4 /* VoiceChannelView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		LASRC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				LA001 /* ClassCountdownAttributes.swift in Sources */,
+				LA002 /* ClapsBoardLiveActivitiesBundle.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		TESTSRC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				TESTBUILD /* ClapsBoardModelTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		LA_DEP /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = LA_TARGET /* ClapsBoardLiveActivitiesExtension */;
+			targetProxy = LA_PROXY /* PBXContainerItemProxy */;
+		};
+		TESTDEP /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = APP /* ClapsBoard */;
+			targetProxy = TESTPROXY /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		DEBUG /* Debug */ = {
@@ -291,10 +508,11 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
 				CODE_SIGN_ENTITLEMENTS = ClapsBoard/ClapsBoard.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 19;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = B5PMRXY8VD;
@@ -323,7 +541,7 @@
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -331,22 +549,93 @@
 					"@executable_path/Frameworks",
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.5.2;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.clapsboard.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
+		};
+		LA_DEBUG /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = NO;
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 19;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = B5PMRXY8VD;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ClapsBoardLiveActivities/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.5.1;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.clapsboard.app.liveactivities;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		LA_RELEASE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = NO;
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 19;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = B5PMRXY8VD;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ClapsBoardLiveActivities/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.5.1;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.clapsboard.app.liveactivities;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRIP_SWIFT_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
 		};
 		RELEASE /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -382,10 +671,12 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
 				CODE_SIGN_ENTITLEMENTS = ClapsBoard/ClapsBoard.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 19;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = B5PMRXY8VD;
@@ -408,7 +699,7 @@
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -416,19 +707,73 @@
 					"@executable_path/Frameworks",
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.5.2;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.clapsboard.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				STRIP_SWIFT_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		TESTDEBUG /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 19;
+				DEVELOPMENT_TEAM = B5PMRXY8VD;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.5.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.clapsboard.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ClapsBoard.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ClapsBoard";
+			};
+			name = Debug;
+		};
+		TESTRELEASE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 19;
+				DEVELOPMENT_TEAM = B5PMRXY8VD;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.5.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.clapsboard.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ClapsBoard.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ClapsBoard";
 			};
 			name = Release;
 		};
@@ -444,11 +789,29 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		LA_CFGLIST /* Build configuration list for PBXNativeTarget "ClapsBoardLiveActivitiesExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				LA_DEBUG /* Debug */,
+				LA_RELEASE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		PROJCFGLIST /* Build configuration list for PBXProject "ClapsBoard" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				DEBUG /* Debug */,
 				RELEASE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		TESTCFGLIST /* Build configuration list for PBXNativeTarget "ClapsBoardTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				TESTDEBUG /* Debug */,
+				TESTRELEASE /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
