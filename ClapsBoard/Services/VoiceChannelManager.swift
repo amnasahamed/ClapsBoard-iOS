@@ -55,6 +55,8 @@ class VoiceChannelManager: NSObject, ObservableObject {
     // MARK: - Blocked & Reported Users (persisted)
     private static let blockedUserIDsKey = "VoiceChannelBlockedUserIDs"
     private static let reportedUserIDsKey = "VoiceChannelReportedUserIDs"
+    private static let peerSuffixKey = "VoiceChannelPeerSuffix"
+    private static let blockListResetKey = "VoiceChannelBlockListResetForUniqueNames"
 
     private var blockedUserIDs: Set<String> {
         didSet {
@@ -82,6 +84,13 @@ class VoiceChannelManager: NSObject, ObservableObject {
     
     // MARK: - Initialization
     override init() {
+        // Entries saved before peers had unique names are bare device names
+        // such as "iPhone", which match every phone. They can't identify
+        // anyone, so drop them once.
+        if !UserDefaults.standard.bool(forKey: Self.blockListResetKey) {
+            UserDefaults.standard.removeObject(forKey: Self.blockedUserIDsKey)
+            UserDefaults.standard.set(true, forKey: Self.blockListResetKey)
+        }
         let blockedArray = UserDefaults.standard.stringArray(forKey: Self.blockedUserIDsKey) ?? []
         self.blockedUserIDs = Set(blockedArray)
 
@@ -116,9 +125,20 @@ class VoiceChannelManager: NSObject, ObservableObject {
     
     // MARK: - Setup
     private func setupPeerID() {
-        // Create a unique peer ID with device name
-        let deviceName = UIDevice.current.name
-        peerID = MCPeerID(displayName: deviceName)
+        // Since iOS 16 UIDevice.current.name is the generic "iPhone" for every
+        // device, and peers are identified (and blocked) by this name. Add a
+        // short code that stays the same for this install, so blocking one
+        // student no longer blocks all of them and the list can tell them apart.
+        let defaults = UserDefaults.standard
+        var suffix = defaults.string(forKey: Self.peerSuffixKey) ?? ""
+        if suffix.isEmpty {
+            suffix = String(UUID().uuidString.prefix(6))
+            defaults.set(suffix, forKey: Self.peerSuffixKey)
+        }
+        // MCPeerID rejects display names longer than 63 UTF-8 bytes.
+        var deviceName = UIDevice.current.name
+        while deviceName.utf8.count > 50 { deviceName.removeLast() }
+        peerID = MCPeerID(displayName: "\(deviceName) \(suffix)")
     }
     
     private func setupSession() {
@@ -206,6 +226,9 @@ class VoiceChannelManager: NSObject, ObservableObject {
     /// - Parameter peer: The peer to report
     func reportUser(_ peer: VoiceChannelPeer) {
         reportedUserIDs.insert(peer.id)
+        // Reporting also removes them, so the tutor isn't left in a channel
+        // with someone they flagged.
+        blockUser(peer)
     }
 
     /// Check if a user is blocked
@@ -290,6 +313,14 @@ extension VoiceChannelManager: MCNearbyServiceAdvertiserDelegate {
             return
         }
 
+        // Only admit peers who joined with this channel's code. Previously any
+        // nearby device could connect regardless of the code shown to students.
+        guard let context, String(data: context, encoding: .utf8) == sessionCode else {
+            print("Peer \(peerID.displayName) joined without the right code, rejecting invitation")
+            invitationHandler(false, nil)
+            return
+        }
+
         invitationHandler(true, session)
     }
     
@@ -305,7 +336,7 @@ extension VoiceChannelManager: MCNearbyServiceBrowserDelegate {
     
     func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String: String]?) {
         guard let code = info?["code"], code == targetSessionCode else { return }
-        browser.invitePeer(peerID, to: session, withContext: nil, timeout: 30)
+        browser.invitePeer(peerID, to: session, withContext: code.data(using: .utf8), timeout: 30)
     }
     
     func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {}

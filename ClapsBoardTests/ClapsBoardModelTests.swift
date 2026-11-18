@@ -141,3 +141,98 @@ final class DrawingElementTests: XCTestCase {
         XCTAssertTrue(ToolType.sticker.supportsProperties)
     }
 }
+
+@MainActor
+final class LessonStoreTests: XCTestCase {
+    private let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("ClapsBoard", isDirectory: true)
+    private lazy var files = ["lesson-workspace-v1.json", "lesson-workspace-v1-recovery.json"]
+        .map { directory.appendingPathComponent($0) }
+    private var originals: [URL: Data] = [:]
+
+    override func setUp() async throws {
+        // The store writes to the host app's real workspace, so keep a copy.
+        for url in files { originals[url] = try? Data(contentsOf: url) }
+    }
+
+    override func tearDown() async throws {
+        for url in files {
+            if let data = originals[url] { try data.write(to: url) } else { try? FileManager.default.removeItem(at: url) }
+        }
+    }
+
+    func testEditsAreDebouncedThenFlushedToDisk() {
+        let store = LessonStore()
+        let element = DrawingElement(type: .pen, points: [CGPoint(x: 1, y: 2), CGPoint(x: 3, y: 4)], color: .black, strokeWidth: 3)
+
+        store.updateActivePage(elements: [element], gridStyle: .none)
+        XCTAssertNotEqual(LessonStore().activePage.elements.map(\.id), [element.id], "save should be debounced, not written synchronously")
+
+        store.flushPendingSave()
+        XCTAssertEqual(LessonStore().activePage.elements.map(\.id), [element.id])
+    }
+}
+
+@MainActor
+final class ExportRenderingTests: XCTestCase {
+    func testExportedPenStrokeKeepsItsColour() throws {
+        let stroke = DrawingElement(type: .pen, points: (0...10).map { CGPoint(x: CGFloat($0) * 20, y: 100) }, color: .red, strokeWidth: 12)
+        let image = try XCTUnwrap(CanvasViewModel().exportImage(elements: [stroke], gridStyle: .none)?.cgImage)
+
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let context = try XCTUnwrap(CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var red = 0, dark = 0
+        for i in stride(from: 0, to: pixels.count, by: 4) {
+            let (r, g, b) = (Int(pixels[i]), Int(pixels[i + 1]), Int(pixels[i + 2]))
+            if r > 200 && g < 80 && b < 80 { red += 1 }
+            if r < 60 && g < 60 && b < 60 { dark += 1 }
+        }
+        XCTAssertGreaterThan(red, 0, "stroke should render in its own colour")
+        XCTAssertEqual(dark, 0, "stroke rendered in the default black")
+    }
+}
+
+final class MathToolkitTests: XCTestCase {
+    func testExpressionParserMatchesAndroid() throws {
+        let cases: [(String, Double, Double)] = [
+            ("y = 2x + 1", 3, 7), ("x^2 - 3", -2, 1), ("-x^2", 2, -4), ("2(x+1)", 1, 4),
+            ("3sin(x)", .pi / 2, 3), ("sqrt(x)", 9, 3), ("1/x", 4, 0.25), ("2^3^2", 0, 512),
+            ("f(x) = 2πx", 1, 2 * .pi), ("x(x-1)", 3, 6), ("(x+1)(x-1)", 3, 8), ("2e", 0, 2 * M_E)
+        ]
+        for (source, x, expected) in cases {
+            XCTAssertEqual(try MathExpression.compile(source)(x), expected, accuracy: 1e-9, source)
+        }
+        for bad in ["2x +", "y = foo(x)", "(x+1", "x$"] {
+            XCTAssertThrowsError(try MathExpression.compile(bad), bad)
+        }
+    }
+
+    func testEveryToolBuildsFromDefaults() {
+        for tool in MathToolID.allCases {
+            if case .failure(let error) = MathDiagramBuilder.build(tool, MathSpecs()) {
+                XCTFail("\(tool) failed: \(error.message)")
+            }
+        }
+    }
+
+    func testInvalidInputGivesReadableErrors() {
+        var specs = MathSpecs()
+        specs.fractions.fractions = "3/0"
+        guard case .failure(let error) = MathDiagramBuilder.build(.fractions, specs) else { return XCTFail("expected failure") }
+        XCTAssertEqual(error.message, "A fraction can’t have 0 at the bottom.")
+
+        specs.graph.functions = "y = x + 100"
+        guard case .failure(let offscreen) = MathDiagramBuilder.build(.graph, specs) else { return XCTFail("expected failure") }
+        XCTAssertTrue(offscreen.message.contains("doesn't pass through this window"))
+    }
+
+    func testFormatting() {
+        XCTAssertEqual(mathFormat(0.1 + 0.2), "0.3")
+        XCTAssertEqual(mathFormat(-2), "−2")
+        XCTAssertEqual(mathFormat(-0.0), "0")
+    }
+}

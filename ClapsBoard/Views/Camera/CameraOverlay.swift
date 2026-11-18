@@ -41,10 +41,11 @@ struct CameraOverlay: View {
                         // Camera Preview
                         CameraPreviewView(cameraManager: cameraManager)
                             .background(Color.black)
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
+                            .opacity(cameraManager.previewOpacity)
+                            .clipShape(RoundedRectangle(cornerRadius: cameraManager.isCircular ? cameraManager.widgetSize.width / 2 : 16))
                             .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
                             .overlay(
-                                RoundedRectangle(cornerRadius: 16)
+                                RoundedRectangle(cornerRadius: cameraManager.isCircular ? cameraManager.widgetSize.width / 2 : 16)
                                     .stroke(Color.white, lineWidth: 4)
                             )
                             // Live/PiP indicator
@@ -52,7 +53,7 @@ struct CameraOverlay: View {
                                 if cameraManager.isActive {
                                     HStack(spacing: 4) {
                                         Circle()
-                                            .fill(cameraManager.isPiPActive ? Color.blue : Color.red)
+                                            .fill(cameraManager.isPiPActive ? AppTheme.accent : Color.red)
                                             .frame(width: 6, height: 6)
                                         Text(cameraManager.isPiPActive ? "PiP" : "LIVE")
                                             .font(.caption2.weight(.bold)) // HIG: Dynamic Type support
@@ -77,10 +78,12 @@ struct CameraOverlay: View {
                     .gesture(
                         DragGesture()
                             .updating($dragOffset) { value, state, _ in
+                                guard !cameraManager.isPositionLocked else { return }
                                 state = value.translation
                                 isDragging = true
                             }
                             .onEnded { value in
+                                guard !cameraManager.isPositionLocked else { return }
                                 let newPosition = CGPoint(
                                     x: cameraManager.position.x + value.translation.width,
                                     y: cameraManager.position.y + value.translation.height
@@ -97,12 +100,6 @@ struct CameraOverlay: View {
                     .accessibilityAddTraits(.allowsDirectInteraction)
                 }
             }
-        }
-        .alert("Camera Access Required", isPresented: $cameraManager.showPermissionAlert) {
-            Button("Open Settings", action: cameraManager.openSettings)
-            Button("Cancel", role: .cancel) { cameraManager.stopCamera() }
-        } message: {
-            Text("Please enable camera access in Settings to use the camera mirror feature.")
         }
     }
 }
@@ -135,7 +132,7 @@ struct CameraControlsOverlay: View {
                                 .font(.system(size: 14, weight: .bold))
                                 .foregroundStyle(.white)
                                 .frame(width: 44, height: 44) // HIG: 44pt minimum touch target
-                                .background(cameraManager.isPiPActive ? .blue : .black.opacity(0.5), in: Circle())
+                                .background(cameraManager.isPiPActive ? AppTheme.accent : .black.opacity(0.5), in: Circle())
                         }
                         .accessibilityLabel(cameraManager.isPiPActive ? "Stop Picture in Picture" : "Start Picture in Picture")
                         .accessibilityHint("Enables floating camera that works outside the app")
@@ -164,6 +161,31 @@ struct CameraControlsOverlay: View {
                                 .frame(width: 44, height: 44) // HIG: 44pt minimum touch target
                                 .background(.black.opacity(0.5), in: Circle())
                         }
+
+                        Menu {
+                            Button {
+                                cameraManager.isPositionLocked.toggle()
+                            } label: {
+                                Label(cameraManager.isPositionLocked ? "Unlock Position" : "Lock Position", systemImage: cameraManager.isPositionLocked ? "lock.open" : "lock")
+                            }
+                            Button {
+                                cameraManager.isCircular.toggle()
+                            } label: {
+                                Label(cameraManager.isCircular ? "Rounded Rectangle" : "Circle", systemImage: cameraManager.isCircular ? "rectangle.roundedtop" : "circle")
+                            }
+                            Button(action: cameraManager.cycleWidgetSize) {
+                                Label("Resize", systemImage: "arrow.up.left.and.arrow.down.right")
+                            }
+                            Button(action: cameraManager.cyclePreviewOpacity) {
+                                Label("Opacity \(Int(cameraManager.previewOpacity * 100))%", systemImage: "circle.lefthalf.filled")
+                            }
+                        } label: {
+                            Image(systemName: cameraManager.isPositionLocked ? "lock.fill" : "slider.horizontal.3")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 44, height: 44)
+                                .background(.black.opacity(0.5), in: Circle())
+                        }
                         
                         Spacer()
                     }
@@ -176,7 +198,7 @@ struct CameraControlsOverlay: View {
                         endPoint: .bottom
                     )
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .clipShape(RoundedRectangle(cornerRadius: cameraManager.isCircular ? cameraManager.widgetSize.width / 2 : 16))
             }
         }
     }

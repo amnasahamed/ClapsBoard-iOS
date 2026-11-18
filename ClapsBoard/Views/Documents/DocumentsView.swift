@@ -207,13 +207,16 @@ struct DocumentsView: View {
             }
             .ignoresSafeArea()
         }
-        .onChange(of: selectedPhotoItems) { newItems in
+        .onChange(of: selectedPhotoItems) { _, newItems in
             if !newItems.isEmpty {
                 importPhotos(newItems)
                 selectedPhotoItems = []
             }
         }
         .onAppear {
+            loadDocuments()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: DocumentInbox.didImport)) { _ in
             loadDocuments()
         }
         .alert("Import Error", isPresented: $showError) {
@@ -260,7 +263,9 @@ struct DocumentsView: View {
             let files = try fileManager.contentsOfDirectory(at: clapsboardDocsPath, includingPropertiesForKeys: [.nameKey, .creationDateKey, .contentModificationDateKey])
             documents = files.compactMap { url in
                 let ext = url.pathExtension.lowercased()
-                guard ["pdf", "docx", "pptx", "xlsx", "txt", "jpg", "jpeg", "png", "heic", "gif", "webp"].contains(ext) else { return nil }
+                // Must cover every type the picker and "Open in ClapsBoard" accept,
+                // or imported files disappear on the next reload.
+                guard ["pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "txt", "jpg", "jpeg", "png", "heic", "gif", "webp"].contains(ext) else { return nil }
                 return DocumentItem(
                     id: UUID(),
                     name: url.deletingPathExtension().lastPathComponent,

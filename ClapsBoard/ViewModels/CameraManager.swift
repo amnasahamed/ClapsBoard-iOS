@@ -73,11 +73,16 @@ class CameraManager: NSObject, ObservableObject {
     @Published var isFlipped: Bool = true {
         didSet {
             updateVideoOrientationAndMirroring()
+            saveWidgetPreferences()
         }
     }
     @Published var isPiPActive: Bool = false
     @Published var isPiPPossible: Bool = false
-    @Published var position: CGPoint = CGPoint(x: 20, y: 100)
+    @Published var position: CGPoint = CGPoint(x: 20, y: 100) { didSet { saveWidgetPreferences() } }
+    @Published var isPositionLocked: Bool = false { didSet { saveWidgetPreferences() } }
+    @Published var isCircular: Bool = false { didSet { updateWidgetSize(); saveWidgetPreferences() } }
+    @Published var previewOpacity: Double = 1 { didSet { saveWidgetPreferences() } }
+    @Published var widgetScale: CGFloat = 1 { didSet { updateWidgetSize(); saveWidgetPreferences() } }
     @Published var previewLayer: AVCaptureVideoPreviewLayer?
     @Published var authorizationStatus: CameraAuthorizationStatus = .notDetermined
     @Published var showPermissionAlert: Bool = false
@@ -101,6 +106,7 @@ class CameraManager: NSObject, ObservableObject {
     
     private var videoDataOutput: AVCaptureVideoDataOutput?
     private let videoDataOutputQueue = DispatchQueue(label: "com.clapsboard.videoDataOutput", qos: .userInteractive)
+    private let audioSessionQueue = DispatchQueue(label: "com.clapsboard.audioSession", qos: .userInitiated)
     
     // Latest-frame buffer for PiP sample layer — avoids dropping frames when layer isn't ready
     private var latestSampleBuffer: CMSampleBuffer?
@@ -111,6 +117,11 @@ class CameraManager: NSObject, ObservableObject {
     private let sessionLock = NSLock()
     private var isSettingUpSession: Bool = false
     private var isStoppingSession: Bool = false
+    /// Set when stopCamera() arrives while setup is still in flight.
+    private var isStopPendingAfterSetup: Bool = false
+    /// All startRunning/stopRunning calls go through one serial queue so a stop
+    /// can never overtake the start it is meant to cancel.
+    private let sessionQueue = DispatchQueue(label: "com.clapsboard.captureSession", qos: .userInitiated)
     
     // Lifecycle tracking
     private var shouldAutoPiP: Bool = false // Auto-start PiP when backgrounding
@@ -119,6 +130,12 @@ class CameraManager: NSObject, ObservableObject {
     private var hasEnqueuedPiPFrame = false
     private var pipStartRetryCount = 0
     private let maxPiPStartRetries = 20
+    /// A start request is in flight; repeated requests are ignored until it lands.
+    private var isPiPStartPending = false
+    /// When PiP last began stopping. iOS briefly resigns the scene while the PiP
+    /// window animates closed, and that must not read as "the tutor left the app".
+    private var lastPiPStopDate: Date?
+    private let pipStopSettleInterval: TimeInterval = 1.5
     
     // Watchdog: detects silent session stalls and restarts the feed
     private var sessionHealthTimer: Timer?
@@ -127,6 +144,7 @@ class CameraManager: NSObject, ObservableObject {
     // Silent audio keeps PiP + camera alive when the app is backgrounded (`audio` mode)
     private var silentAudioEngine: AVAudioEngine?
     private var isBackgroundKeepAliveActive = false
+    private var isBackgroundKeepAliveStarting = false
     
     
     var widgetSize: CGSize = CGSize(width: 140, height: 186)
@@ -145,11 +163,47 @@ class CameraManager: NSObject, ObservableObject {
     
     override init() {
         super.init()
+        loadWidgetPreferences()
         updateAuthorizationStatus()
         setupAudioSession() // Required for PiP
         checkPiPSupport()
         setupNotificationObservers() // Monitor app lifecycle for PiP
     }
+
+    private func loadWidgetPreferences() {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "cameraWidgetX") != nil {
+            position = CGPoint(x: defaults.double(forKey: "cameraWidgetX"), y: defaults.double(forKey: "cameraWidgetY"))
+        }
+        isPositionLocked = defaults.bool(forKey: "cameraWidgetLocked")
+        isCircular = defaults.bool(forKey: "cameraWidgetCircular")
+        let opacity = defaults.double(forKey: "cameraWidgetOpacity")
+        previewOpacity = opacity == 0 ? 1 : opacity
+        let scale = defaults.double(forKey: "cameraWidgetScale")
+        widgetScale = scale == 0 ? 1 : scale
+        if defaults.object(forKey: "cameraWidgetFlipped") != nil { isFlipped = defaults.bool(forKey: "cameraWidgetFlipped") }
+        updateWidgetSize()
+    }
+
+    private func saveWidgetPreferences() {
+        let defaults = UserDefaults.standard
+        defaults.set(position.x, forKey: "cameraWidgetX")
+        defaults.set(position.y, forKey: "cameraWidgetY")
+        defaults.set(isPositionLocked, forKey: "cameraWidgetLocked")
+        defaults.set(isCircular, forKey: "cameraWidgetCircular")
+        defaults.set(previewOpacity, forKey: "cameraWidgetOpacity")
+        defaults.set(widgetScale, forKey: "cameraWidgetScale")
+        defaults.set(isFlipped, forKey: "cameraWidgetFlipped")
+    }
+
+    private func updateWidgetSize() {
+        widgetSize = isCircular
+            ? CGSize(width: 150 * widgetScale, height: 150 * widgetScale)
+            : CGSize(width: 140 * widgetScale, height: 186 * widgetScale)
+    }
+
+    func cycleWidgetSize() { widgetScale = widgetScale >= 1.35 ? 0.85 : widgetScale + 0.2 }
+    func cyclePreviewOpacity() { previewOpacity = previewOpacity <= 0.65 ? 1 : previewOpacity - 0.2 }
     
     deinit {
         NotificationCenter.default.removeObserver(self)
@@ -157,46 +211,50 @@ class CameraManager: NSObject, ObservableObject {
     
     // MARK: - Audio Session Setup
     private func setupAudioSession() {
-        do {
+        audioSessionQueue.async {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .videoChat, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP])
-            try session.setActive(true)
-            print("✅ Audio session configured for video chat")
-        } catch {
-            print("⚠️ Failed to setup audio session: \(error.localizedDescription)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                do {
-                    let session = AVAudioSession.sharedInstance()
-                    try session.setCategory(.playAndRecord, mode: .videoChat, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP])
-                    try session.setActive(true)
-                } catch {
-                    print("❌ Audio session retry also failed: \(error.localizedDescription)")
+            do {
+                try session.setCategory(.playAndRecord, mode: .videoChat, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP])
+                try session.setActive(true)
+                print("✅ Audio session configured for video chat")
+            } catch {
+                print("⚠️ Failed to setup audio session: \(error.localizedDescription)")
+                self.audioSessionQueue.asyncAfter(deadline: .now() + 0.3) {
+                    do {
+                        let session = AVAudioSession.sharedInstance()
+                        try session.setCategory(.playAndRecord, mode: .videoChat, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP])
+                        try session.setActive(true)
+                        print("✅ Audio session configured on retry")
+                    } catch {
+                        print("❌ Audio session retry also failed: \(error.localizedDescription)")
+                    }
                 }
             }
         }
     }
-    
+
     /// Playback-oriented session required for background PiP with the `audio` background mode.
-    private func setupPiPAudioSession() {
-        do {
+    private func setupPiPAudioSession(completion: ((Bool) -> Void)? = nil) {
+        audioSessionQueue.async {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers])
-            try session.setActive(true)
-            print("✅ Audio session configured for background PiP")
-        } catch {
-            print("⚠️ Failed to setup PiP audio session: \(error.localizedDescription)")
+            do {
+                try session.setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers])
+                try session.setActive(true)
+                print("✅ Audio session configured for background PiP")
+                if let completion { DispatchQueue.main.async { completion(true) } }
+            } catch {
+                print("⚠️ Failed to setup PiP audio session: \(error.localizedDescription)")
+                if let completion { DispatchQueue.main.async { completion(false) } }
+            }
         }
     }
-    
-    /// Plays silent audio so iOS keeps the app alive for PiP while backgrounded.
-    private func startBackgroundKeepAlive() {
-        guard !isBackgroundKeepAliveActive else { return }
-        
-        setupPiPAudioSession()
-        
+
+    private func startSilentAudioEngine() {
+        guard isBackgroundKeepAliveStarting, !isBackgroundKeepAliveActive else { return }
+
         let engine = AVAudioEngine()
         let format = engine.outputNode.outputFormat(forBus: 0)
-        let sourceNode = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
+        let sourceNode = AVAudioSourceNode(format: format) { _, _, _, audioBufferList -> OSStatus in
             let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
             for buffer in buffers {
                 if let data = buffer.mData {
@@ -205,11 +263,11 @@ class CameraManager: NSObject, ObservableObject {
             }
             return noErr
         }
-        
+
         engine.attach(sourceNode)
         engine.connect(sourceNode, to: engine.mainMixerNode, format: format)
         engine.mainMixerNode.outputVolume = 0.001
-        
+
         do {
             try engine.start()
             silentAudioEngine = engine
@@ -218,9 +276,25 @@ class CameraManager: NSObject, ObservableObject {
         } catch {
             print("❌ Failed to start background keep-alive: \(error.localizedDescription)")
         }
+        isBackgroundKeepAliveStarting = false
+    }
+    
+    /// Plays silent audio so iOS keeps the app alive for PiP while backgrounded.
+    private func startBackgroundKeepAlive() {
+        guard !isBackgroundKeepAliveActive, !isBackgroundKeepAliveStarting else { return }
+        isBackgroundKeepAliveStarting = true
+        setupPiPAudioSession { [weak self] configured in
+            guard let self else { return }
+            guard configured else {
+                self.isBackgroundKeepAliveStarting = false
+                return
+            }
+            self.startSilentAudioEngine()
+        }
     }
     
     private func stopBackgroundKeepAlive() {
+        isBackgroundKeepAliveStarting = false
         guard isBackgroundKeepAliveActive else { return }
         silentAudioEngine?.stop()
         silentAudioEngine = nil
@@ -364,9 +438,15 @@ class CameraManager: NSObject, ObservableObject {
         if isPiPActive {
             print("📱 Scene deactivating with PiP active — enabling background keep-alive")
             activatePiPBackgroundMode()
+        } else if let stoppedAt = lastPiPStopDate, Date().timeIntervalSince(stoppedAt) < pipStopSettleInterval {
+            // Restarting here re-opened PiP every time the tutor closed it.
+            print("📱 Scene resigned while PiP was closing - not restarting PiP")
         } else if isActive {
             print("📱 App resigning active - enabling auto-PiP intent")
             shouldAutoPiP = true
+            // PiP must be requested while the scene is still foreground-active.
+            // Waiting until didEnterBackground is too late on many devices.
+            startPiP()
         }
     }
     
@@ -406,9 +486,9 @@ class CameraManager: NSObject, ObservableObject {
             } else {
                 setupAudioSession()
             }
-            DispatchQueue.global(qos: .userInitiated).async {
+            sessionQueue.async { [weak self] in
                 session.startRunning()
-                DispatchQueue.main.async { [weak self] in
+                DispatchQueue.main.async {
                     self?.updateVideoOrientationAndMirroring()
                     self?.recoverSampleBufferLayerIfNeeded()
                 }
@@ -526,11 +606,17 @@ class CameraManager: NSObject, ObservableObject {
     func startCamera() {
         // Prevent race conditions with session state lock
         sessionLock.lock()
-        defer { sessionLock.unlock() }
-        
         // Check if already running or in the process of setting up/stopping
-        guard captureSession == nil, !isSettingUpSession, !isStoppingSession else { return }
+        guard captureSession == nil, !isSettingUpSession, !isStoppingSession else {
+            sessionLock.unlock()
+            return
+        }
         isSettingUpSession = true
+        isStopPendingAfterSetup = false
+        // Unlock before asking for permission: when access is denied the
+        // completion runs synchronously and re-locks, and NSLock is not
+        // re-entrant, so holding it here froze the main thread.
+        sessionLock.unlock()
         
         // Verify permission first
         requestCameraPermission { [weak self] granted in
@@ -541,12 +627,17 @@ class CameraManager: NSObject, ObservableObject {
                 return
             }
             
-            DispatchQueue.global(qos: .userInitiated).async {
+            self.sessionQueue.async {
                 self.setupCaptureSession()
+                // Queued after setupCaptureSession's own main-queue hop, so
+                // captureSession is assigned by the time this runs.
                 DispatchQueue.main.async {
                     self.sessionLock.lock()
                     self.isSettingUpSession = false
+                    let stopRequested = self.isStopPendingAfterSetup
+                    self.isStopPendingAfterSetup = false
                     self.sessionLock.unlock()
+                    if stopRequested { self.stopCamera() }
                 }
             }
         }
@@ -559,6 +650,13 @@ class CameraManager: NSObject, ObservableObject {
         
         // Check if already stopping or nothing to stop
         guard !isStoppingSession else {
+            sessionLock.unlock()
+            return
+        }
+        // The session isn't assigned until setup finishes; stopping now would
+        // orphan it with the camera still running, so stop once it lands.
+        if isSettingUpSession {
+            isStopPendingAfterSetup = true
             sessionLock.unlock()
             return
         }
@@ -585,8 +683,7 @@ class CameraManager: NSObject, ObservableObject {
         isPiPDisplayLayerAttached = false
         hasEnqueuedPiPFrame = false
         pipStartRetryCount = 0
-        SampleBufferProcessor.resetPool()
-        SampleBufferProcessor.resetDiagnostics()
+        resetSampleBufferProcessor()
         
         sampleBufferLock.lock()
         latestSampleBuffer = nil
@@ -600,7 +697,7 @@ class CameraManager: NSObject, ObservableObject {
         }
         
         // HIG: stopRunning() is a blocking call, move to background
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        sessionQueue.async { [weak self] in
             // Flush sample buffer layer before stopping session to prevent frame queuing errors
             sampleLayer?.flush()
             session?.stopRunning()
@@ -669,9 +766,7 @@ class CameraManager: NSObject, ObservableObject {
         // orientation is re-synced in updateVideoOrientationAndMirroring()
         // once setup completes on the main queue below.
         if let connection = dataOutput.connection(with: .video) {
-            if connection.isVideoOrientationSupported {
-                connection.videoOrientation = .portrait
-            }
+            Self.apply(.portrait, to: connection)
             if connection.isVideoMirroringSupported {
                 connection.automaticallyAdjustsVideoMirroring = false
                 connection.isVideoMirrored = isFlipped
@@ -793,6 +888,15 @@ class CameraManager: NSObject, ObservableObject {
         pipSourceHostView = nil
     }
     
+    /// The processor's pixel buffer pool is used on the video queue, so reset it
+    /// there. Resetting from main raced frame processing and dropped a crop.
+    private func resetSampleBufferProcessor() {
+        videoDataOutputQueue.async {
+            SampleBufferProcessor.resetPool()
+            SampleBufferProcessor.resetDiagnostics()
+        }
+    }
+
     private func updatePiPHostRenderSize(_ renderSize: CMVideoDimensions) {
         let size = CGSize(width: CGFloat(renderSize.width), height: CGFloat(renderSize.height))
         guard size.width > 0, size.height > 0 else { return }
@@ -803,8 +907,7 @@ class CameraManager: NSObject, ObservableObject {
         
         pipSampleBufferLayer?.flush()
         hasEnqueuedPiPFrame = false
-        SampleBufferProcessor.resetPool()
-        SampleBufferProcessor.resetDiagnostics()
+        resetSampleBufferProcessor()
         
         print("📺 PiP host resized to match render size: \(Int(size.width))x\(Int(size.height))")
     }
@@ -872,9 +975,7 @@ class CameraManager: NSObject, ObservableObject {
         let orientation = currentVideoOrientation
 
         if let connection = videoDataOutput?.connection(with: .video) {
-            if connection.isVideoOrientationSupported {
-                connection.videoOrientation = orientation
-            }
+            Self.apply(orientation, to: connection)
             if connection.isVideoMirroringSupported {
                 connection.automaticallyAdjustsVideoMirroring = false
                 connection.isVideoMirrored = isFlipped
@@ -882,9 +983,7 @@ class CameraManager: NSObject, ObservableObject {
         }
 
         if let previewConnection = previewLayer?.connection {
-            if previewConnection.isVideoOrientationSupported {
-                previewConnection.videoOrientation = orientation
-            }
+            Self.apply(orientation, to: previewConnection)
             if previewConnection.isVideoMirroringSupported {
                 previewConnection.automaticallyAdjustsVideoMirroring = false
                 previewConnection.isVideoMirrored = isFlipped
@@ -893,6 +992,22 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     /// Maps the active scene's interface orientation to a capture orientation
+    /// Rotation angles replace `videoOrientation` (deprecated in iOS 17):
+    /// landscapeRight is the sensor's native 0°, portrait is 90°.
+    private static func apply(_ orientation: AVCaptureVideoOrientation, to connection: AVCaptureConnection) {
+        let angle: CGFloat
+        switch orientation {
+        case .landscapeRight: angle = 0
+        case .portrait: angle = 90
+        case .landscapeLeft: angle = 180
+        case .portraitUpsideDown: angle = 270
+        @unknown default: angle = 90
+        }
+        if connection.isVideoRotationAngleSupported(angle) {
+            connection.videoRotationAngle = angle
+        }
+    }
+
     private var currentVideoOrientation: AVCaptureVideoOrientation {
         let interfaceOrientation = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
@@ -997,6 +1112,10 @@ class CameraManager: NSObject, ObservableObject {
             pipStartRetryCount = 0
             return
         }
+
+        // Scene, frame and button callbacks can all request a start within a
+        // few milliseconds; one request is enough.
+        guard !isPiPStartPending else { return }
         
         // Switch to playback audio session + silent audio so PiP stays alive in background
         startBackgroundKeepAlive()
@@ -1004,7 +1123,12 @@ class CameraManager: NSObject, ObservableObject {
         if controller.isPictureInPicturePossible {
             print("🎬 Starting PiP...")
             pipStartRetryCount = 0
+            isPiPStartPending = true
             controller.startPictureInPicture()
+            // If iOS never reports back, don't block PiP for good.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                self?.isPiPStartPending = false
+            }
         } else {
             guard pipStartRetryCount < maxPiPStartRetries else {
                 let layerStatus = pipSampleBufferLayer.map { String(describing: $0.status) } ?? "nil"
@@ -1024,6 +1148,8 @@ class CameraManager: NSObject, ObservableObject {
     func stopPiP() {
         shouldAutoPiP = false
         pipStartRetryCount = 0
+        isPiPStartPending = false
+        lastPiPStopDate = Date()
         stopBackgroundKeepAlive()
         
         guard let controller = pipController else {
@@ -1152,6 +1278,7 @@ extension CameraManager: AVPictureInPictureControllerDelegate {
     
     func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
         print("✅ PiP did start - camera now works outside the app!")
+        DispatchQueue.main.async { self.isPiPStartPending = false }
         activatePiPBackgroundMode()
         ensureSessionRunning(reason: "PiP did start")
         recoverSampleBufferLayerIfNeeded()
@@ -1162,11 +1289,15 @@ extension CameraManager: AVPictureInPictureControllerDelegate {
     
     func pictureInPictureControllerWillStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
         print("⏹️ PiP will stop")
+        // Also covers PiP closed from its own window, not just our button.
+        lastPiPStopDate = Date()
     }
     
     func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
         print("✅ PiP did stop - returning to inline mode")
         DispatchQueue.main.async {
+            self.lastPiPStopDate = Date()
+            self.isPiPStartPending = false
             self.isPiPActive = false
             // Don't auto-restart PiP after manual stop
             self.shouldAutoPiP = false
@@ -1176,6 +1307,7 @@ extension CameraManager: AVPictureInPictureControllerDelegate {
     func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
         print("❌ PiP failed to start: \(error.localizedDescription)")
         DispatchQueue.main.async {
+            self.isPiPStartPending = false
             self.isPiPActive = false
             self.shouldAutoPiP = false
         }
@@ -1187,7 +1319,7 @@ extension CameraManager: AVPictureInPictureControllerDelegate {
         
         // Ensure camera session is running
         if let session = captureSession, !session.isRunning {
-            DispatchQueue.global(qos: .userInitiated).async {
+            sessionQueue.async {
                 session.startRunning()
             }
         }

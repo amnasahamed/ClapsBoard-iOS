@@ -27,7 +27,7 @@ struct DrawingCanvas: View {
                 // Drawing canvas - renders elements at touch location
                 Canvas { context, size in
                     // Draw existing elements
-                    for element in viewModel.elements where !element.isDeleted {
+                    for element in viewModel.elements where !element.isDeleted && viewModel.isVisible(element) {
                         drawElement(element, in: &context)
                     }
 
@@ -39,7 +39,7 @@ struct DrawingCanvas: View {
                 .frame(width: geometry.size.width, height: geometry.size.height)
 
                 // Selection overlay for selected element
-                if let selected = viewModel.selectedElement {
+                if let selected = viewModel.selectedElement, viewModel.isVisible(selected) {
                     SelectionOverlay(element: selected, viewModel: viewModel)
                 }
 
@@ -73,7 +73,7 @@ struct DrawingCanvas: View {
             .contentShape(Rectangle())
             .gesture(drawingGesture)
             .clipped()
-            .onChange(of: isCanvasTransformGestureActive) { isActive in
+            .onChange(of: isCanvasTransformGestureActive) { _, isActive in
                 if isActive {
                     cancelActiveCanvasInteraction()
                 }
@@ -120,6 +120,7 @@ struct DrawingCanvas: View {
                 }
                 selectionDragOriginal = found
                 selectionDidMove = false
+                viewModel.isManipulatingSelection = true
             }
 
             guard let original = selectionDragOriginal else { return }
@@ -174,6 +175,7 @@ struct DrawingCanvas: View {
             }
             selectionDragOriginal = nil
             selectionDidMove = false
+            viewModel.isManipulatingSelection = false
 
         case .eraser:
             eraserCursorPosition = nil
@@ -268,6 +270,7 @@ struct DrawingCanvas: View {
 
         selectionDragOriginal = nil
         selectionDidMove = false
+        viewModel.isManipulatingSelection = false
         viewModel.isDrawing = false
     }
     
@@ -449,7 +452,7 @@ struct DrawingCanvas: View {
     // MARK: - Helper Functions
     private func topmostElement(at point: CGPoint) -> DrawingElement? {
         viewModel.elements.reversed().first { element in
-            !element.isDeleted && hitTest(point, for: element)
+            !element.isDeleted && viewModel.isVisible(element) && hitTest(point, for: element)
         }
     }
 
@@ -517,7 +520,7 @@ struct DrawingCanvas: View {
         
         // HIG: Spatial optimization - only check elements that intersect the eraser's current region
         for i in 0..<updatedElements.count {
-            if updatedElements[i].isDeleted { continue }
+            if updatedElements[i].isDeleted || !viewModel.isVisible(updatedElements[i]) { continue }
             
             let element = updatedElements[i]
             // Expand bounding box by stroke width to ensure we can hit the edges of thick lines
@@ -745,6 +748,7 @@ struct SelectionOverlay: View {
                 if resizeOriginal == nil {
                     resizeOriginal = element
                 }
+                viewModel.isManipulatingSelection = true
                 guard let original = resizeOriginal else { return }
                 let resized = resizedElement(original, from: position, by: value.translation)
                 viewModel.updateElement(resized)
@@ -753,6 +757,7 @@ struct SelectionOverlay: View {
             .onEnded { _ in
                 viewModel.commitChange(description: "Element resized")
                 resizeOriginal = nil
+                viewModel.isManipulatingSelection = false
             }
     }
 
@@ -944,20 +949,22 @@ struct TextInputOverlay: View {
             .background(.ultraThinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 16))
             .shadow(color: .black.opacity(0.2), radius: 12, y: 6)
-            // Smart positioning to keep on screen (4000x4000 bounds)
+            // Just above the tap, kept off the canvas's top-left edge. There is
+            // deliberately no upper limit: the old one assumed a 4000-pt canvas
+            // and pushed the box about 1000 pt away from every tap, off-screen.
             .position(
-                x: min(max(localPosition.x, 150), 3850),
-                y: min(max(localPosition.y - 60, 100), 3900)
+                x: max(localPosition.x, 150),
+                y: max(localPosition.y - 60, 100)
             )
         }
         .accessibilityLabel("Text input overlay")
         .ignoresSafeArea()
         .onAppear { 
             isFocused = true
-            // Adjust position if too close to edges
+            // Adjust position if too close to the top-left edge
             localPosition = CGPoint(
-                x: min(max(position.x, 150), 3850),
-                y: min(max(position.y, 150), 3850)
+                x: max(position.x, 150),
+                y: max(position.y, 150)
             )
         }
     }

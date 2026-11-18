@@ -8,20 +8,32 @@
 import SwiftUI
 import PencilKit
 import UIKit
+import PDFKit
 
 struct BoardView: View {
     @ObservedObject var viewModel: CanvasViewModel
     @ObservedObject var cameraManager: CameraManager
+    @ObservedObject var lessonStore: LessonStore
     @EnvironmentObject var appState: AppState
-
-    // iPad optimization: adaptive canvas size for larger screens
-    @Environment(\.horizontalSizeClass) var horizontalSizeClass
 
     @State private var showClearConfirm = false
     @State private var showExportSheet = false
     @State private var showMenu = false
     @State private var exportedImage: UIImage?
+    @State private var exportedPDFURL: URL?
     @State private var isExporting = false
+    @State private var showLessonLibrary = false
+    @State private var isTeachMode = false
+    @State private var teachStartedAt: Date?
+    @State private var teachElapsed: TimeInterval = 0
+    @State private var teachHistoryId: UUID?
+    @State private var showMathToolkit = false
+    @State private var showLayerControls = false
+    @State private var showPageSwitcher = false
+    @State private var showDocumentBesideBoard = false
+    @State private var boardSplitRatio: CGFloat = 0.56
+    @State private var splitDragStartRatio: CGFloat?
+    @State private var documentResizeVersion = 0
     @GestureState private var magnificationState: CGFloat = 1.0
     @GestureState private var isMagnificationGestureActive = false
     @State private var lastPanValue: DragGesture.Value?
@@ -35,13 +47,21 @@ struct BoardView: View {
     @SceneStorage("canvasPanX") private var storedPanX: Double = 0
     @SceneStorage("canvasPanY") private var storedPanY: Double = 0
 
-    // Adaptive canvas size: 15000 for iPad (regular), 10000 for iPhone (compact)
-    private var canvasSize: CGFloat {
-        horizontalSizeClass == .regular ? 15000 : 10000
-    }
+    // One fixed size. Element coordinates are absolute and the view is centred
+    // on canvasSize / 2, so the size must never change. It used to switch to
+    // 15000 for a regular width class, which Plus/Max iPhones report in
+    // landscape: rotating moved the centre by 2500 pt and the board looked empty.
+    private let canvasSize: CGFloat = 10000
+
+    // Larger values cause Core Animation to request textures beyond the GPU's
+    // supported dimensions on high-density iPhones (for example 11k × 23k).
+    private let maximumSafeZoom: CGFloat = 2.5
 
     var body: some View {
         GeometryReader { geometry in
+            let usesSideSplit = showDocumentBesideBoard && geometry.size.width > geometry.size.height
+            let boardWidth = usesSideSplit ? geometry.size.width * boardSplitRatio : geometry.size.width
+            let boardHeight = showDocumentBesideBoard && !usesSideSplit ? geometry.size.height * boardSplitRatio : geometry.size.height
             ZStack {
                 ZStack {
                     CanvasBackground(gridStyle: viewModel.gridStyle)
@@ -67,7 +87,7 @@ struct BoardView: View {
                         .onEnded { value in
                             isSuppressingDrawingForCanvasTransform = true
                             let newZoom = viewModel.zoom * value
-                            let clampedZoom = max(0.1, min(10.0, newZoom))
+                            let clampedZoom = max(0.1, min(maximumSafeZoom, newZoom))
 
                             // Haptic feedback at zoom limits
                             if newZoom != clampedZoom {
@@ -82,7 +102,11 @@ struct BoardView: View {
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            if viewModel.tool == .pan || viewModel.tool == .select {
+                            // With Select, a drag on empty canvas pans, but a drag that is
+                            // moving or resizing an element must not pan as well.
+                            let isPanning = viewModel.tool == .pan
+                                || (viewModel.tool == .select && !viewModel.isManipulatingSelection)
+                            if isPanning {
                                 if let last = lastPanValue {
                                     let deltaX = value.translation.width - last.translation.width
                                     let deltaY = value.translation.height - last.translation.height
@@ -107,7 +131,8 @@ struct BoardView: View {
                             generator.impactOccurred()
                         }
                 )
-                .frame(width: geometry.size.width, height: geometry.size.height)
+                .frame(width: boardWidth, height: boardHeight)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .clipped()
                 .ignoresSafeArea()
 
@@ -116,12 +141,35 @@ struct BoardView: View {
                     Text("Tap anywhere to begin")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.secondary.opacity(0.46))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .frame(width: boardWidth, height: boardHeight)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .allowsHitTesting(false)
                     .accessibilityLabel("Tap anywhere to begin")
                 }
 
-                controlsLayer(in: geometry)
+                if isTeachMode {
+                    teachModeControls(in: geometry)
+                        .frame(width: boardWidth, height: boardHeight)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                } else {
+                    controlsLayer(in: geometry, availableSize: CGSize(width: boardWidth, height: boardHeight))
+                        .frame(width: boardWidth, height: boardHeight)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
+
+                if showPageSwitcher {
+                    pageNavigation(in: geometry)
+                        .frame(width: boardWidth, height: boardHeight)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
+                if viewModel.activeLayer != .base || hasPreparedAnswer {
+                    answerRevealQuickControl(in: geometry)
+                        .frame(width: boardWidth, height: boardHeight)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .zIndex(15)
+                }
 
                 // Export loading overlay
                 if isExporting {
@@ -158,6 +206,34 @@ struct BoardView: View {
                     .accessibilityLabel("Canvas zoom level \(Int(viewModel.zoom * 100)) percent")
                     .accessibilityHint("Double tap to reset zoom to 100 percent")
                     .transition(.opacity.combined(with: .scale))
+                }
+
+                if showDocumentBesideBoard {
+                    Group {
+                        if usesSideSplit {
+                            HStack(spacing: 0) {
+                                Spacer().frame(width: boardWidth)
+                                Rectangle()
+                                    .fill(AppTheme.accent.opacity(0.65))
+                                    .frame(width: 6)
+                                    .contentShape(Rectangle().inset(by: -12))
+                                    .gesture(splitResizeGesture(totalLength: geometry.size.width, usesHorizontalMovement: true))
+                                BoardDocumentPanel(resizeVersion: documentResizeVersion, onClose: { showDocumentBesideBoard = false })
+                            }
+                        } else {
+                            VStack(spacing: 0) {
+                                Spacer().frame(height: boardHeight)
+                                Rectangle()
+                                    .fill(AppTheme.accent.opacity(0.65))
+                                    .frame(height: 6)
+                                    .contentShape(Rectangle().inset(by: -12))
+                                    .gesture(splitResizeGesture(totalLength: geometry.size.height, usesHorizontalMovement: false))
+                                BoardDocumentPanel(resizeVersion: documentResizeVersion, onClose: { showDocumentBesideBoard = false })
+                            }
+                        }
+                    }
+                    .transition(.move(edge: .bottom))
+                    .zIndex(20)
                 }
             }
         }
@@ -196,11 +272,62 @@ struct BoardView: View {
         .sheet(isPresented: $showExportSheet, onDismiss: {
             // Clean up exported image to free memory and reset state
             exportedImage = nil
+            if let url = exportedPDFURL { try? FileManager.default.removeItem(at: url) }
+            exportedPDFURL = nil
         }) {
-            if let image = exportedImage {
+            if let url = exportedPDFURL {
+                ShareSheet(items: [url])
+            } else if let image = exportedImage {
                 ShareSheet(items: [image])
             }
         }
+        .sheet(isPresented: $showLessonLibrary) {
+            LessonLibraryView(
+                store: lessonStore,
+                onOpen: loadActiveLesson,
+                onTeach: startTeachMode,
+                onActiveLessonDeleted: reloadActiveLessonPage
+            )
+        }
+        .sheet(isPresented: $showMathToolkit) {
+            MathToolkitView { image, diagram in insertMathDiagram(image, diagram) }
+        }
+        .sheet(isPresented: $showLayerControls) {
+            AnswerLayerControls(
+                viewModel: viewModel,
+                onPrepare: beginAnswerPreparation,
+                onRevealNext: revealNextAnswerStep,
+                onHideAll: hidePreparedAnswers
+            )
+                .presentationDetents([.medium])
+        }
+        .onAppear {
+            viewModel.zoom = min(maximumSafeZoom, max(0.1, viewModel.zoom))
+            loadActiveLesson()
+        }
+        .onChange(of: viewModel.elements) { _, elements in
+            lessonStore.updateActivePage(elements: elements, gridStyle: viewModel.gridStyle)
+        }
+        .onChange(of: viewModel.gridStyle) { _, style in
+            lessonStore.updateActivePage(elements: viewModel.elements, gridStyle: style)
+        }
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+            if let started = teachStartedAt { teachElapsed = Date().timeIntervalSince(started) }
+        }
+    }
+
+    private func splitResizeGesture(totalLength: CGFloat, usesHorizontalMovement: Bool) -> some Gesture {
+        DragGesture()
+            .onChanged { value in
+                if splitDragStartRatio == nil { splitDragStartRatio = boardSplitRatio }
+                let translation = usesHorizontalMovement ? value.translation.width : value.translation.height
+                let nextRatio = min(0.76, max(0.34, (splitDragStartRatio ?? boardSplitRatio) + translation / max(totalLength, 1)))
+                if abs(nextRatio - boardSplitRatio) > 0.002 { boardSplitRatio = nextRatio }
+            }
+            .onEnded { _ in
+                splitDragStartRatio = nil
+                documentResizeVersion += 1
+            }
     }
 
     private func releaseDrawingSuppressionAfterCanvasTransform() {
@@ -231,10 +358,245 @@ struct BoardView: View {
         }
     }
 
+    private func loadActiveLesson() {
+        reloadActiveLessonPage()
+        showLessonLibrary = false
+    }
+
+    /// Puts the store's active page on the board without closing the library.
+    private func reloadActiveLessonPage() {
+        viewModel.loadLessonPage(lessonStore.activePage)
+        hidePreparedAnswers()
+    }
+
+    private func openPage(_ id: UUID) {
+        lessonStore.openPage(id)
+        viewModel.loadLessonPage(lessonStore.activePage)
+        hidePreparedAnswers()
+    }
+
+    private func addPage() {
+        _ = lessonStore.addPage()
+        loadActiveLesson()
+    }
+
+    private func deletePage() {
+        lessonStore.deleteActivePage()
+        loadActiveLesson()
+    }
+
+    private func startTeachMode() {
+        loadActiveLesson()
+        isTeachMode = true
+        teachStartedAt = Date()
+        teachElapsed = 0
+        let historyId = UUID()
+        teachHistoryId = historyId
+        if var student = lessonStore.students.first(where: { $0.id == lessonStore.activeLesson.studentId }) {
+            var history = student.lessonHistory ?? []
+            history.insert(LessonHistoryItem(id: historyId, lessonId: lessonStore.activeLesson.id, lessonTitle: lessonStore.activeLesson.title, startedAt: Date(), finishedAt: nil, durationSeconds: nil), at: 0)
+            student.lessonHistory = history
+            lessonStore.updateStudent(student)
+        }
+        viewModel.showProperties = false
+        if !cameraManager.isActive { cameraManager.toggleCamera() }
+    }
+
+    private func stopTeachMode() {
+        if let historyId = teachHistoryId,
+           var student = lessonStore.students.first(where: { $0.id == lessonStore.activeLesson.studentId }),
+           let index = student.lessonHistory?.firstIndex(where: { $0.id == historyId }) {
+            student.lessonHistory?[index].finishedAt = Date()
+            student.lessonHistory?[index].durationSeconds = Int(teachElapsed)
+            lessonStore.updateStudent(student)
+        }
+        isTeachMode = false
+        teachStartedAt = nil
+        teachHistoryId = nil
+    }
+
+    private func exportLessonPDF() {
+        guard !isExporting else { return }
+        isExporting = true
+        let lesson = lessonStore.activeLesson
+        let pageBounds = CGRect(x: 0, y: 0, width: 842, height: 595)
+        let renderer = UIGraphicsPDFRenderer(bounds: pageBounds)
+        let data = renderer.pdfData { context in
+            for page in lesson.pages {
+                context.beginPage()
+                let title = "\(lesson.title) — \(page.title)"
+                title.draw(at: CGPoint(x: 32, y: 22), withAttributes: [.font: UIFont.boldSystemFont(ofSize: 18), .foregroundColor: UIColor.label])
+                if let image = viewModel.exportImage(elements: page.elements, gridStyle: page.gridStyle) {
+                    let available = CGRect(x: 32, y: 58, width: pageBounds.width - 64, height: pageBounds.height - 90)
+                    let scale = min(available.width / image.size.width, available.height / image.size.height)
+                    let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+                    image.draw(in: CGRect(x: available.midX - size.width / 2, y: available.midY - size.height / 2, width: size.width, height: size.height))
+                }
+            }
+        }
+        let safeName = lesson.title.replacingOccurrences(of: "/", with: "-")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(safeName)-lesson.pdf")
+        do {
+            try data.write(to: url, options: .atomic)
+            exportedPDFURL = url
+            showExportSheet = true
+        } catch {
+            print("❌ Lesson PDF export failed: \(error.localizedDescription)")
+        }
+        isExporting = false
+    }
+
     @ViewBuilder
-    private func controlsLayer(in geometry: GeometryProxy) -> some View {
+    private func teachModeControls(in geometry: GeometryProxy) -> some View {
+        VStack {
+            HStack(spacing: 10) {
+                HStack(spacing: 8) {
+                    Circle().fill(.red).frame(width: 8, height: 8)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("TEACH MODE").font(.caption2.bold()).foregroundStyle(AppTheme.accent)
+                        Text("\(lessonStore.activeLesson.title) · \(elapsedText)").font(.caption.bold()).foregroundStyle(.white).lineLimit(1)
+                    }
+                }
+                .padding(.horizontal, 14).frame(height: 48)
+                .background(.black.opacity(0.84), in: Capsule())
+
+                Spacer()
+
+                Button(action: stopTeachMode) {
+                    Label("Finish", systemImage: "stop.fill").font(.caption.bold()).foregroundStyle(.white)
+                        .padding(.horizontal, 14).frame(height: 48).background(.red, in: Capsule())
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, resolvedSafeAreaInsets(for: geometry).top + 8)
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private func pageNavigation(in geometry: GeometryProxy) -> some View {
+        let lesson = lessonStore.activeLesson
+        let index = lesson.pages.firstIndex(where: { $0.id == lesson.activePageId }) ?? 0
+        VStack {
+            Spacer()
+            HStack(spacing: 3) {
+                Button { withAnimation { showPageSwitcher = false } } label: {
+                    Image(systemName: "xmark").frame(width: 40, height: 40)
+                }
+
+                Button { if index > 0 { openPage(lesson.pages[index - 1].id) } } label: {
+                    Image(systemName: "chevron.left").frame(width: 40, height: 40)
+                }.disabled(index == 0)
+
+                Button { showLessonLibrary = true } label: {
+                    VStack(spacing: 0) {
+                        Text(lesson.pages[index].title).font(.caption.bold()).lineLimit(1)
+                        Text("\(index + 1) of \(lesson.pages.count)").font(.caption2).foregroundStyle(.secondary)
+                    }.frame(minWidth: 70, maxWidth: 120)
+                }
+
+                Button { if index + 1 < lesson.pages.count { openPage(lesson.pages[index + 1].id) } } label: {
+                    Image(systemName: "chevron.right").frame(width: 40, height: 40)
+                }.disabled(index + 1 == lesson.pages.count)
+
+                Button(action: addPage) { Image(systemName: "plus").frame(width: 40, height: 40).background(AppTheme.accent, in: Circle()).foregroundStyle(.white) }
+
+                if lesson.pages.count > 1 {
+                    Button(role: .destructive, action: deletePage) { Image(systemName: "trash").frame(width: 40, height: 40) }
+                }
+            }
+            .padding(4)
+            .background(.ultraThinMaterial, in: Capsule())
+            .shadow(color: .black.opacity(0.1), radius: 12, y: 5)
+            .padding(.bottom, geometry.size.width > geometry.size.height ? 8 : resolvedSafeAreaInsets(for: geometry).bottom + 72)
+        }
+    }
+
+    private var elapsedText: String {
+        let seconds = Int(teachElapsed)
+        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private var hintItemCount: Int {
+        viewModel.elements.filter { !$0.isDeleted && ($0.layer ?? .base) == .hint }.count
+    }
+
+    private var answerItemCount: Int {
+        viewModel.elements.filter { !$0.isDeleted && ($0.layer ?? .base) == .solution }.count
+    }
+
+    private var hasPreparedAnswer: Bool { hintItemCount > 0 || answerItemCount > 0 }
+
+    private var nextRevealTitle: String {
+        if viewModel.visibleLayers.contains(.solution) { return "Hide prepared content" }
+        if viewModel.visibleLayers.contains(.hint) { return answerItemCount > 0 ? "Reveal answer" : "Hide hint" }
+        if hintItemCount > 0 { return "Reveal hint" }
+        return "Reveal answer"
+    }
+
+    private func hidePreparedAnswers() {
+        viewModel.activeLayer = .base
+        viewModel.visibleLayers = [.base]
+    }
+
+    private func beginAnswerPreparation(_ layer: AnswerLayer) {
+        guard layer != .base else { return }
+        viewModel.activeLayer = layer
+        viewModel.visibleLayers = [.base, layer]
+        showLayerControls = false
+    }
+
+    private func revealNextAnswerStep() {
+        viewModel.activeLayer = .base
+        if hintItemCount > 0, !viewModel.visibleLayers.contains(.hint) {
+            viewModel.visibleLayers = [.base, .hint]
+        } else if answerItemCount > 0, !viewModel.visibleLayers.contains(.solution) {
+            viewModel.visibleLayers = hintItemCount > 0 ? [.base, .hint, .solution] : [.base, .solution]
+        } else {
+            viewModel.visibleLayers = [.base]
+        }
+    }
+
+    @ViewBuilder
+    private func answerRevealQuickControl(in geometry: GeometryProxy) -> some View {
+        VStack {
+            if viewModel.activeLayer != .base {
+                HStack(spacing: 10) {
+                    Text("Preparing \(viewModel.activeLayer == .hint ? "HINT" : "ANSWER") · visible now")
+                        .font(.caption.bold())
+                        .foregroundStyle(.white)
+                    Button("Done & Hide", action: hidePreparedAnswers)
+                        .font(.caption.bold())
+                        .foregroundStyle(.brown)
+                        .padding(.horizontal, 11)
+                        .frame(height: 30)
+                        .background(.white, in: Capsule())
+                }
+                .padding(.leading, 14)
+                .padding(.trailing, 4)
+                .frame(height: 40)
+                .background(.brown.opacity(0.94), in: Capsule())
+                .shadow(radius: 8, y: 3)
+            } else {
+                Button(action: revealNextAnswerStep) {
+                    Label(nextRevealTitle, systemImage: viewModel.visibleLayers.contains(.solution) ? "eye.slash" : "eye")
+                        .font(.caption.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .frame(height: 38)
+                        .background(viewModel.visibleLayers.contains(.solution) ? Color.secondary : AppTheme.accent, in: Capsule())
+                        .shadow(radius: 7, y: 3)
+                }
+            }
+            Spacer()
+        }
+        .padding(.top, resolvedSafeAreaInsets(for: geometry).top + 68)
+    }
+
+    @ViewBuilder
+    private func controlsLayer(in geometry: GeometryProxy, availableSize: CGSize) -> some View {
         if geometry.size.width > geometry.size.height {
-            landscapeControlRails(in: geometry)
+            landscapeControlRails(in: geometry, availableSize: availableSize)
         } else {
             portraitControlStack(in: geometry)
         }
@@ -262,15 +624,16 @@ struct BoardView: View {
                 ToolbarView(viewModel: viewModel)
                     .zIndex(1)
             }
-            .padding(.horizontal, 16)
+            // 8pt keeps the full tool bar (with Marker) on 393pt-wide phones.
+            .padding(.horizontal, 8)
             .padding(.bottom, bottomControlPadding)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
     }
 
-    private func landscapeControlRails(in geometry: GeometryProxy) -> some View {
+    private func landscapeControlRails(in geometry: GeometryProxy, availableSize: CGSize) -> some View {
         let metrics = BoardFloatingRailMetrics(
-            containerSize: geometry.size,
+            containerSize: availableSize,
             safeAreaInsets: resolvedSafeAreaInsets(for: geometry),
             interfaceOrientation: activeInterfaceOrientation
         )
@@ -328,11 +691,47 @@ struct BoardView: View {
             showMenu: $showMenu,
             showClearConfirm: $showClearConfirm,
             onExport: handleExport,
+            onExportLesson: exportLessonPDF,
+            onLessons: { showLessonLibrary = true },
+            onMathToolkit: { showMathToolkit = true },
+            onLayers: { showLayerControls = true },
+            onPageToggle: { withAnimation { showPageSwitcher.toggle() } },
+            isPageSwitcherVisible: showPageSwitcher,
+            onDocumentToggle: { withAnimation { showDocumentBesideBoard.toggle() } },
+            isDocumentBesideBoard: showDocumentBesideBoard,
             orientation: orientation
         )
         .opacity(viewModel.isDrawing ? 0.28 : 1)
         .blur(radius: viewModel.isDrawing ? 0.7 : 0)
         .animation(.easeInOut(duration: 0.18), value: viewModel.isDrawing)
+    }
+
+    private func insertMathDiagram(_ image: UIImage, _ diagram: MathDiagram) {
+        guard let data = image.pngData(),
+              let mediaId = StorageService.shared.saveMedia(data) else { return }
+        // Size it to at most ~70% of the visible board at the current zoom,
+        // so it lands where the tutor is looking and fits on screen.
+        let zoom = max(viewModel.zoom, 0.1)
+        let windowSize = activeWindowScene?.windows.first(where: { $0.isKeyWindow })?.bounds.size ?? CGSize(width: 390, height: 844)
+        let scale = min(0.7 * windowSize.width / zoom / diagram.size.width,
+                        0.6 * windowSize.height / zoom / diagram.size.height,
+                        560 / diagram.size.width)
+        let width = diagram.size.width * scale
+        let height = diagram.size.height * scale
+        let visibleCenterX = canvasSize / 2 - viewModel.pan.x / max(viewModel.zoom, 0.1)
+        let visibleCenterY = canvasSize / 2 - viewModel.pan.y / max(viewModel.zoom, 0.1)
+        let element = DrawingElement(
+            type: .image,
+            x: visibleCenterX - width / 2,
+            y: visibleCenterY - height / 2,
+            width: width,
+            height: height,
+            mediaId: mediaId,
+            layer: viewModel.activeLayer
+        )
+        viewModel.addElement(element)
+        viewModel.tool = .select
+        showMathToolkit = false
     }
 }
 
@@ -652,6 +1051,14 @@ struct HeaderControls: View {
     @Binding var showMenu: Bool
     @Binding var showClearConfirm: Bool
     let onExport: () -> Void
+    let onExportLesson: () -> Void
+    let onLessons: () -> Void
+    let onMathToolkit: () -> Void
+    let onLayers: () -> Void
+    let onPageToggle: () -> Void
+    let isPageSwitcherVisible: Bool
+    let onDocumentToggle: () -> Void
+    let isDocumentBesideBoard: Bool
     var orientation: BoardControlOrientation = .horizontal
     
     var body: some View {
@@ -688,6 +1095,24 @@ struct HeaderControls: View {
 
         PiPCameraButton(cameraManager: cameraManager)
 
+        HeaderChromeButton(
+            icon: "rectangle.stack",
+            accessibilityLabel: "Page switcher",
+            accessibilityValue: isPageSwitcherVisible ? "Visible" : "Hidden",
+            accessibilityHint: "Shows or hides lesson page controls",
+            isActive: isPageSwitcherVisible,
+            action: onPageToggle
+        )
+
+        HeaderChromeButton(
+            icon: "rectangle.split.1x2",
+            accessibilityLabel: "Document below board",
+            accessibilityValue: isDocumentBesideBoard ? "On" : "Off",
+            accessibilityHint: "Shows or hides a local document below the board",
+            isActive: isDocumentBesideBoard,
+            action: onDocumentToggle
+        )
+
         if cameraManager.isActive {
             HeaderChromeButton(
                 icon: "video.fill",
@@ -700,6 +1125,26 @@ struct HeaderControls: View {
         }
 
         Menu {
+            Button(action: onLessons) {
+                Label("Lessons & Students", systemImage: "books.vertical")
+            }
+
+            Button(action: onMathToolkit) {
+                Label("Math Toolkit", systemImage: "function")
+            }
+
+            Button(action: onLayers) {
+                Label("Answer Layers", systemImage: "square.3.layers.3d")
+            }
+
+            Button(action: onPageToggle) {
+                Label(isPageSwitcherVisible ? "Hide Page Switcher" : "Show Page Switcher", systemImage: "rectangle.stack")
+            }
+
+            Button(action: onDocumentToggle) {
+                Label(isDocumentBesideBoard ? "Hide Bottom Document" : "Document Below Board", systemImage: "rectangle.split.1x2")
+            }
+
             Button {
                 appState.showSettings = true
             } label: {
@@ -722,6 +1167,10 @@ struct HeaderControls: View {
 
             Button(action: onExport) {
                 Label("Export Image", systemImage: "square.and.arrow.down")
+            }
+
+            Button(action: onExportLesson) {
+                Label("Export Lesson PDF", systemImage: "doc.richtext")
             }
 
             Divider()
@@ -811,6 +1260,527 @@ private struct HeaderChromeGlyph: View {
     }
 }
 
+// MARK: - Offline Lesson Library
+struct LessonLibraryView: View {
+    @ObservedObject var store: LessonStore
+    let onOpen: () -> Void
+    let onTeach: () -> Void
+    let onActiveLessonDeleted: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var lessonPendingDelete: TutorLesson?
+    @State private var selectedStudentId: UUID
+    @State private var studentName = ""
+    @State private var lessonTitle = ""
+    @State private var homeworkTitle = ""
+    @State private var localDocumentNames: [String] = []
+
+    init(store: LessonStore, onOpen: @escaping () -> Void, onTeach: @escaping () -> Void, onActiveLessonDeleted: @escaping () -> Void) {
+        self.store = store
+        self.onOpen = onOpen
+        self.onTeach = onTeach
+        self.onActiveLessonDeleted = onActiveLessonDeleted
+        _selectedStudentId = State(initialValue: store.students.first?.id ?? UUID())
+    }
+
+    private var visibleLessons: [TutorLesson] {
+        store.lessons.filter { $0.studentId == selectedStudentId }.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(store.students) { student in
+                                Button(student.name) { selectedStudentId = student.id }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(selectedStudentId == student.id ? AppTheme.accent : Color.secondary.opacity(0.22))
+                            }
+                        }
+                    }
+
+                    HStack {
+                        TextField("New student folder", text: $studentName).textFieldStyle(.roundedBorder)
+                        Button {
+                            guard !studentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                            let student = store.addStudent(name: studentName)
+                            selectedStudentId = student.id
+                            studentName = ""
+                        } label: { Label("Student", systemImage: "person.badge.plus") }
+                            .buttonStyle(.borderedProminent)
+                    }
+
+                    if let student = selectedStudent {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Label("Student notes", systemImage: "note.text").font(.headline)
+                            TextEditor(text: Binding(
+                                get: { selectedStudent?.notes ?? "" },
+                                set: { value in updateSelectedStudent { $0.notes = value } }
+                            ))
+                            .frame(minHeight: 82)
+                            .padding(8)
+                            .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+
+                            Label("Homework", systemImage: "checklist").font(.headline)
+                            HStack {
+                                TextField("Add homework", text: $homeworkTitle).textFieldStyle(.roundedBorder)
+                                Button("Add") {
+                                    let title = homeworkTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    guard !title.isEmpty else { return }
+                                    updateSelectedStudent { value in
+                                        var items = value.homework ?? []
+                                        items.append(HomeworkItem(id: UUID(), title: title, isComplete: false, createdAt: Date()))
+                                        value.homework = items
+                                    }
+                                    homeworkTitle = ""
+                                }.buttonStyle(.bordered)
+                            }
+                            ForEach(student.homework ?? []) { item in
+                                Button {
+                                    updateSelectedStudent { value in
+                                        guard let index = value.homework?.firstIndex(where: { $0.id == item.id }) else { return }
+                                        value.homework?[index].isComplete.toggle()
+                                    }
+                                } label: {
+                                    Label(item.title, systemImage: item.isComplete ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(item.isComplete ? .secondary : .primary)
+                                }.buttonStyle(.plain)
+                            }
+
+                            Label("Assigned documents", systemImage: "folder").font(.headline)
+                            if localDocumentNames.isEmpty {
+                                Text("Import PDFs or worksheets from the Docs tab, then assign them here.").font(.caption).foregroundStyle(.secondary)
+                            } else {
+                                ForEach(localDocumentNames, id: \.self) { name in
+                                    Toggle(name, isOn: Binding(
+                                        get: { selectedStudent?.documentNames?.contains(name) == true },
+                                        set: { assigned in
+                                            updateSelectedStudent { value in
+                                                var names = value.documentNames ?? []
+                                                if assigned && !names.contains(name) { names.append(name) }
+                                                if !assigned { names.removeAll { $0 == name } }
+                                                value.documentNames = names
+                                            }
+                                        }
+                                    ))
+                                }
+                            }
+
+                            Label("Lesson history", systemImage: "clock.arrow.circlepath").font(.headline)
+                            if (student.lessonHistory ?? []).isEmpty {
+                                Text("Finished Teach Mode sessions will appear here.").font(.caption).foregroundStyle(.secondary)
+                            } else {
+                                ForEach((student.lessonHistory ?? []).prefix(8)) { item in
+                                    HStack {
+                                        VStack(alignment: .leading) {
+                                            Text(item.lessonTitle).font(.subheadline.bold())
+                                            Text(item.startedAt.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        if let seconds = item.durationSeconds { Text("\(seconds / 60)m").font(.caption.monospacedDigit()) }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(14)
+                        .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
+                    }
+
+                    HStack {
+                        TextField("Lesson title", text: $lessonTitle).textFieldStyle(.roundedBorder)
+                        Button {
+                            guard !lessonTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                            _ = store.addLesson(studentId: selectedStudentId, title: lessonTitle)
+                            lessonTitle = ""
+                            onOpen(); dismiss()
+                        } label: { Label("Lesson", systemImage: "plus") }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .padding(12)
+                    .background(AppTheme.accentSoft, in: RoundedRectangle(cornerRadius: 16))
+
+                    if visibleLessons.isEmpty {
+                        VStack(spacing: 10) {
+                            Image(systemName: "books.vertical").font(.largeTitle).foregroundStyle(.secondary)
+                            Text("No Lessons").font(.headline)
+                            Text("Create the first lesson for this student.").font(.subheadline).foregroundStyle(.secondary)
+                        }.frame(maxWidth: .infinity).padding(.vertical, 30)
+                    } else {
+                        LazyVStack(spacing: 10) {
+                            ForEach(visibleLessons) { lesson in
+                                HStack(spacing: 12) {
+                                    Button {
+                                        store.openLesson(lesson.id); onOpen(); dismiss()
+                                    } label: {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(lesson.title).font(.headline).foregroundStyle(.primary).lineLimit(1)
+                                            Text("\(lesson.pages.count) \(lesson.pages.count == 1 ? "page" : "pages") · \(lesson.updatedAt.formatted(date: .abbreviated, time: .omitted))")
+                                                .font(.caption).foregroundStyle(.secondary)
+                                        }.frame(maxWidth: .infinity, alignment: .leading)
+                                    }.buttonStyle(.plain)
+
+                                    Button {
+                                        store.openLesson(lesson.id); onTeach(); dismiss()
+                                    } label: { Label("Teach", systemImage: "play.fill") }
+                                        .buttonStyle(.borderedProminent)
+
+                                    if store.lessons.count > 1 {
+                                        Button(role: .destructive) { lessonPendingDelete = lesson } label: { Image(systemName: "trash") }
+                                            .frame(width: 44, height: 44)
+                                    }
+                                }
+                                .padding(14)
+                                .background(lesson.id == store.activeLessonId ? AppTheme.accentSoft : Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 16))
+                            }
+                        }
+                    }
+                }.padding()
+            }
+            .navigationTitle("Lessons")
+            .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Done") { dismiss() } } }
+            .alert(
+                "Delete Lesson?",
+                isPresented: Binding(get: { lessonPendingDelete != nil }, set: { if !$0 { lessonPendingDelete = nil } }),
+                presenting: lessonPendingDelete
+            ) { lesson in
+                Button("Delete", role: .destructive) { deleteLesson(lesson) }
+                Button("Cancel", role: .cancel) { }
+            } message: { lesson in
+                Text("\u{201C}\(lesson.title)\u{201D} and its pages will be removed from this device. This can't be undone.")
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .onAppear(perform: loadLocalDocuments)
+    }
+
+    private func deleteLesson(_ lesson: TutorLesson) {
+        let wasActive = lesson.id == store.activeLessonId
+        store.deleteLesson(lesson.id)
+        // The store has moved on to another lesson. The board must follow,
+        // or the next stroke writes the deleted lesson's drawing into it.
+        if wasActive { onActiveLessonDeleted() }
+    }
+
+    private var selectedStudent: StudentFolder? {
+        store.students.first(where: { $0.id == selectedStudentId })
+    }
+
+    private func updateSelectedStudent(_ update: (inout StudentFolder) -> Void) {
+        guard var student = selectedStudent else { return }
+        update(&student)
+        store.updateStudent(student)
+    }
+
+    private func loadLocalDocuments() {
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("ClapsBoard Documents", isDirectory: true)
+        localDocumentNames = ((try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [])
+            .map(\.lastPathComponent)
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+}
+
+// MARK: - Answer Reveal Layers
+private struct AnswerLayerControls: View {
+    @ObservedObject var viewModel: CanvasViewModel
+    let onPrepare: (AnswerLayer) -> Void
+    let onRevealNext: () -> Void
+    let onHideAll: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private var screenDescription: String {
+        if viewModel.visibleLayers.contains(.solution) { return "Question + hint + answer" }
+        if viewModel.visibleLayers.contains(.hint) { return "Question + hint" }
+        return "Question only"
+    }
+
+    private var hintCount: Int {
+        viewModel.elements.filter { !$0.isDeleted && ($0.layer ?? .base) == .hint }.count
+    }
+
+    private var answerCount: Int {
+        viewModel.elements.filter { !$0.isDeleted && ($0.layer ?? .base) == .solution }.count
+    }
+
+    private var nextTitle: String {
+        if viewModel.visibleLayers.contains(.solution) { return "Hide prepared content" }
+        if viewModel.visibleLayers.contains(.hint) { return answerCount > 0 ? "Reveal answer" : "Hide hint" }
+        if hintCount > 0 { return "Reveal hint" }
+        return "Reveal answer"
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Currently on screen") {
+                    Label(screenDescription, systemImage: "eye")
+                        .font(.headline)
+
+                    if hintCount > 0 || answerCount > 0 {
+                        Button {
+                            onRevealNext()
+                            dismiss()
+                        } label: {
+                            Label(nextTitle, systemImage: viewModel.visibleLayers.contains(.solution) ? "eye.slash" : "eye")
+                                .font(.headline)
+                        }
+                    }
+
+                    if viewModel.visibleLayers.contains(.hint) && !viewModel.visibleLayers.contains(.solution) {
+                        Button {
+                            onHideAll()
+                            dismiss()
+                        } label: {
+                            Label("Hide prepared content", systemImage: "eye.slash")
+                        }
+                    }
+                }
+
+                Section {
+                    Text("Prepare before sharing your screen. The selected content is visible while you edit; tap Done & Hide on the board when finished.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    preparationButton(.hint, title: hintCount > 0 ? "Edit hint" : "Prepare hint", count: hintCount)
+                    preparationButton(.solution, title: answerCount > 0 ? "Edit answer" : "Prepare answer", count: answerCount)
+                } header: {
+                    Text("Prepare this page")
+                }
+            }
+            .navigationTitle("Prepared Answer")
+        }
+    }
+
+    private func preparationButton(_ layer: AnswerLayer, title: String, count: Int) -> some View {
+        Button {
+            onPrepare(layer)
+            dismiss()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: layer.iconName)
+                    .foregroundStyle(layer == .hint ? .orange : .green)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.headline).foregroundStyle(.primary)
+                    Text("\(count) items on this page").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Document Beside Board
+private struct BoardDocumentPanel: View {
+    let resizeVersion: Int
+    let onClose: () -> Void
+    @State private var files: [URL] = []
+    @State private var selectedURL: URL?
+    @State private var pdfPage = 1
+    @State private var pdfPageCount = 0
+    @State private var fitRequest = 0
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 0) {
+                HStack {
+                    Menu {
+                        if files.isEmpty { Text("Import documents from the Docs tab") }
+                        ForEach(files, id: \.self) { file in Button(file.lastPathComponent) { selectedURL = file } }
+                    } label: {
+                        Label(selectedURL?.lastPathComponent ?? "Choose document", systemImage: "doc")
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Button(action: onClose) { Image(systemName: "xmark.circle.fill").font(.title3) }
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 42)
+
+                if selectedURL != nil {
+                    HStack(spacing: 6) {
+                        if selectedURL?.pathExtension.lowercased() == "pdf" {
+                            Button { pdfPage = max(1, pdfPage - 1) } label: {
+                                Image(systemName: "chevron.left").frame(width: 36, height: 36)
+                            }
+                            .disabled(pdfPage <= 1)
+
+                            Text("\(pdfPage) / \(max(pdfPageCount, 1))")
+                                .font(.caption.bold().monospacedDigit())
+                                .frame(minWidth: 56)
+
+                            Button { pdfPage = min(max(pdfPageCount, 1), pdfPage + 1) } label: {
+                                Image(systemName: "chevron.right").frame(width: 36, height: 36)
+                            }
+                            .disabled(pdfPage >= pdfPageCount)
+                        }
+
+                        Spacer()
+                        Text("Pinch to zoom")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Button { fitRequest += 1 } label: {
+                            Label("Fit", systemImage: "arrow.up.left.and.arrow.down.right")
+                                .font(.caption.bold())
+                                .padding(.horizontal, 10)
+                                .frame(height: 32)
+                                .background(AppTheme.accent, in: Capsule())
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .frame(height: 42)
+                    .overlay(alignment: .top) { Divider() }
+                }
+            }
+            .background(.ultraThinMaterial)
+
+            Group {
+                if let url = selectedURL, url.pathExtension.lowercased() == "pdf" {
+                    EmbeddedPDFView(url: url, page: $pdfPage, pageCount: $pdfPageCount, fitRequest: fitRequest)
+                } else if let url = selectedURL, let image = UIImage(contentsOfFile: url.path) {
+                    ZoomableDocumentImage(image: image, fitRequest: fitRequest)
+                } else {
+                    VStack(spacing: 12) {
+                        Image(systemName: "doc.text").font(.largeTitle).foregroundStyle(.secondary)
+                        Text("No document selected").font(.headline)
+                        Text("Choose a local PDF or image above.").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(uiColor: .secondarySystemBackground))
+        }
+        .onAppear(perform: loadFiles)
+        .onChange(of: selectedURL) {
+            pdfPage = 1
+            pdfPageCount = 0
+            fitRequest += 1
+        }
+        .onChange(of: resizeVersion) { fitRequest += 1 }
+    }
+
+    private func loadFiles() {
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("ClapsBoard Documents", isDirectory: true)
+        files = ((try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [])
+            .filter { ["pdf", "png", "jpg", "jpeg", "heic"].contains($0.pathExtension.lowercased()) }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        if selectedURL == nil { selectedURL = files.first }
+    }
+}
+
+private struct EmbeddedPDFView: UIViewRepresentable {
+    let url: URL
+    @Binding var page: Int
+    @Binding var pageCount: Int
+    let fitRequest: Int
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.backgroundColor = .secondarySystemBackground
+        view.displayMode = .singlePage
+        view.displayDirection = .vertical
+        view.displaysPageBreaks = true
+        view.autoScales = false
+        view.document = PDFDocument(url: url)
+        view.maxScaleFactor = 6
+        NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coordinator.pageChanged(_:)), name: .PDFViewPageChanged, object: view)
+        context.coordinator.pdfView = view
+        updatePageCount(view.document)
+        return view
+    }
+
+    func updateUIView(_ view: PDFView, context: Context) {
+        context.coordinator.parent = self
+        if view.document?.documentURL != url {
+            view.document = PDFDocument(url: url)
+            page = 1
+            updatePageCount(view.document)
+            view.autoScales = false
+            let fitScale = max(view.scaleFactorForSizeToFit, 0.1)
+            view.scaleFactor = fitScale
+        }
+        if let document = view.document,
+           let current = view.currentPage,
+           document.index(for: current) + 1 != page,
+           let destination = document.page(at: max(0, min(page - 1, document.pageCount - 1))) {
+            view.go(to: destination)
+        }
+        if context.coordinator.lastFitRequest != fitRequest {
+            context.coordinator.lastFitRequest = fitRequest
+            view.autoScales = false
+            view.scaleFactor = max(view.scaleFactorForSizeToFit, 0.1)
+        }
+        let fitScale = max(view.scaleFactorForSizeToFit, 0.1)
+        view.minScaleFactor = fitScale * 0.5
+        view.maxScaleFactor = max(6, fitScale * 6)
+    }
+
+    private func updatePageCount(_ document: PDFDocument?) {
+        let count = document?.pageCount ?? 0
+        DispatchQueue.main.async { pageCount = count }
+    }
+
+    final class Coordinator: NSObject {
+        var parent: EmbeddedPDFView
+        weak var pdfView: PDFView?
+        var lastFitRequest = -1
+
+        init(_ parent: EmbeddedPDFView) { self.parent = parent }
+
+        @objc func pageChanged(_ notification: Notification) {
+            guard let view = notification.object as? PDFView,
+                  let document = view.document,
+                  let current = view.currentPage else { return }
+            let nextPage = document.index(for: current) + 1
+            DispatchQueue.main.async { self.parent.page = nextPage }
+        }
+
+        deinit { NotificationCenter.default.removeObserver(self) }
+    }
+}
+
+private struct ZoomableDocumentImage: UIViewRepresentable {
+    let image: UIImage
+    let fitRequest: Int
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIScrollView {
+        let scrollView = UIScrollView()
+        scrollView.delegate = context.coordinator
+        scrollView.minimumZoomScale = 1
+        scrollView.maximumZoomScale = 6
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.backgroundColor = .secondarySystemBackground
+
+        let imageView = UIImageView(image: image)
+        imageView.contentMode = .scaleAspectFit
+        imageView.frame = scrollView.bounds
+        imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        scrollView.addSubview(imageView)
+        context.coordinator.imageView = imageView
+        return scrollView
+    }
+
+    func updateUIView(_ scrollView: UIScrollView, context: Context) {
+        context.coordinator.imageView?.image = image
+        if context.coordinator.lastFitRequest != fitRequest {
+            context.coordinator.lastFitRequest = fitRequest
+            scrollView.setZoomScale(1, animated: true)
+            scrollView.setContentOffset(.zero, animated: true)
+        }
+    }
+
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        weak var imageView: UIImageView?
+        var lastFitRequest = -1
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+    }
+}
+
 // MARK: - Share Sheet
 struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
@@ -858,6 +1828,6 @@ struct ShareSheet: UIViewControllerRepresentable {
 
 // MARK: - Preview
 #Preview {
-    BoardView(viewModel: CanvasViewModel(), cameraManager: CameraManager())
+    BoardView(viewModel: CanvasViewModel(), cameraManager: CameraManager(), lessonStore: LessonStore())
         .environmentObject(AppState())
 }

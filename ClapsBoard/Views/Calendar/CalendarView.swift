@@ -138,7 +138,7 @@ struct CalendarView: View {
         .onReceive(sessionManager.$sessions) { sessions in
             liveActivityCoordinator.updateSessions(sessions)
         }
-        .onChange(of: scenePhase) { phase in
+        .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             liveActivityCoordinator.updateSessions(sessionManager.sessions)
         }

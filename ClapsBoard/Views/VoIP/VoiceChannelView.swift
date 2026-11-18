@@ -116,7 +116,7 @@ struct VoiceChannelView: View {
                         .background(Color(.secondarySystemGroupedBackground))
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .focused($isCodeFocused)
-                        .onChange(of: joinCode) { newValue in
+                        .onChange(of: joinCode) { _, newValue in
                             if newValue.count > 0 { select.selectionChanged() }
                             if newValue.count > 4 { joinCode = String(newValue.prefix(4)) }
                         }
@@ -128,10 +128,10 @@ struct VoiceChannelView: View {
                         Image(systemName: "arrow.right")
                             .font(.system(size: 20, weight: .bold))
                             .frame(width: 60, height: 60)
-                            .background(joinCode.count == 4 ? Color.blue : Color.gray.opacity(0.3))
+                            .background(joinCode.count == 4 ? AppTheme.accent : Color.gray.opacity(0.3))
                             .foregroundStyle(.white)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .shadow(color: joinCode.count == 4 ? .blue.opacity(0.3) : .clear, radius: 5, x: 0, y: 3)
+                            .shadow(color: joinCode.count == 4 ? AppTheme.accent.opacity(0.3) : .clear, radius: 5, x: 0, y: 3)
                     }
                     .disabled(joinCode.count != 4)
                 }
@@ -150,9 +150,9 @@ struct VoiceChannelView: View {
             VStack(spacing: 1) {
                 InfoItem(icon: "bolt.fill", color: .orange, title: "Low Latency", subtitle: "Real-time communication with peer-to-peer technology.")
                 Divider().padding(.leading, 50)
-                InfoItem(icon: "lock.fill", color: .blue, title: "Secure", subtitle: "End-to-end encrypted connection on your local network.")
+                InfoItem(icon: "lock.fill", color: AppTheme.accent, title: "Secure", subtitle: "Encrypted, device-to-device connection on your local network. No servers involved.")
                 Divider().padding(.leading, 50)
-                InfoItem(icon: "speaker.wave.3.fill", color: .green, title: "Spatial Audio", subtitle: "Optimized for clear voice chat during tutoring.")
+                InfoItem(icon: "speaker.wave.3.fill", color: .green, title: "Clear Voice", subtitle: "Tuned for speech during tutoring.")
             }
             .background(Color(.secondarySystemGroupedBackground))
             .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -235,8 +235,8 @@ struct ActiveSessionCard: View {
                         ForEach(voiceManager.connectedPeers) { peer in
                             HStack(spacing: 12) {
                                 ZStack {
-                                    Circle().fill(Color.blue.opacity(0.1)).frame(width: 40, height: 40)
-                                    Image(systemName: "person.fill").foregroundStyle(.blue)
+                                    Circle().fill(AppTheme.accent.opacity(0.1)).frame(width: 40, height: 40)
+                                    Image(systemName: "person.fill").foregroundStyle(AppTheme.accent)
 
                                     // Remote audio indicator
                                     Circle()
@@ -268,7 +268,7 @@ struct ActiveSessionCard: View {
                                 Button {
                                     voiceManager.reportUser(peer)
                                 } label: {
-                                    Label("Report", systemImage: "flag.fill")
+                                    Label("Report and remove", systemImage: "flag.fill")
                                 }
                             }
 
@@ -311,7 +311,7 @@ struct ActiveSessionCard: View {
     private var statusColor: Color {
         switch voiceManager.state {
         case .hosting: return .orange
-        case .joining: return .blue
+        case .joining: return AppTheme.accent
         case .connected: return .green
         case .error: return .red
         default: return .gray

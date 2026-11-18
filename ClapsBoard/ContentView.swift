@@ -13,6 +13,7 @@ struct ContentView: View {
     @EnvironmentObject var notificationManager: NotificationManager
     @StateObject private var canvasViewModel = CanvasViewModel()
     @StateObject private var cameraManager = CameraManager()
+    @StateObject private var lessonStore = LessonStore()
 
     // HIG: Reduce Motion support
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -21,7 +22,7 @@ struct ContentView: View {
         ZStack {
             // Keep pages alive without allowing hidden horizontal page swipes.
             ZStack {
-                BoardView(viewModel: canvasViewModel, cameraManager: cameraManager)
+                BoardView(viewModel: canvasViewModel, cameraManager: cameraManager, lessonStore: lessonStore)
                     .opacity(appState.selectedTab == .board ? 1 : 0)
                     .allowsHitTesting(appState.selectedTab == .board)
                     .accessibilityHidden(appState.selectedTab != .board)
@@ -43,6 +44,14 @@ struct ContentView: View {
             if cameraManager.isActive {
                 CameraOverlay(cameraManager: cameraManager)
             }
+        }
+        // Lives here, not in CameraOverlay: when access is denied the camera
+        // never becomes active, so an alert inside the overlay never showed.
+        .alert("Camera Access Required", isPresented: $cameraManager.showPermissionAlert) {
+            Button("Open Settings", action: cameraManager.openSettings)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Please enable camera access in Settings to use the camera mirror feature.")
         }
         .overlay {
             // Onboarding Modal

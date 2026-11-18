@@ -27,12 +27,16 @@ struct ToolbarView: View {
                     toolbarItems
                 }
             } else {
-                HStack(spacing: 6) {
-                    toolbarItems
+                // Pen, marker and eraser get one-tap buttons because tutors
+                // switch between them constantly. On the narrowest phones the
+                // marker falls back into the "+" menu so the bar still fits.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 2) { toolbarItems }
+                    HStack(spacing: 2) { compactToolbarItems }
                 }
             }
         }
-        .padding(.horizontal, orientation == .vertical ? 6 : 8)
+        .padding(.horizontal, 6)
         .padding(.vertical, orientation == .vertical ? 8 : 6)
         .background {
             Capsule()
@@ -46,8 +50,14 @@ struct ToolbarView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: viewModel.isDrawing)
     }
 
+    private static let primaryTools: [ToolType] = [.pen, .marker, .eraser]
+    private static let compactPrimaryTools: [ToolType] = [.pen, .eraser]
+
+    private var toolbarItems: some View { items(primaryTools: Self.primaryTools) }
+    private var compactToolbarItems: some View { items(primaryTools: Self.compactPrimaryTools) }
+
     @ViewBuilder
-    private var toolbarItems: some View {
+    private func items(primaryTools: [ToolType] = ToolbarView.primaryTools) -> some View {
         ToolbarIconButton(
             icon: "arrow.uturn.backward",
             isEnabled: viewModel.canUndo,
@@ -66,11 +76,13 @@ struct ToolbarView: View {
             action: { selectTool(.pan) }
         )
 
-        ToolbarIconButton(
-            icon: "pencil",
-            isSelected: viewModel.tool == .pen,
-            action: { selectTool(.pen) }
-        )
+        ForEach(primaryTools, id: \.self) { tool in
+            ToolbarIconButton(
+                icon: tool.iconName,
+                isSelected: viewModel.tool == tool,
+                action: { selectTool(tool) }
+            )
+        }
 
         if viewModel.tool.supportsProperties {
             ToolbarIconButton(
@@ -80,7 +92,7 @@ struct ToolbarView: View {
             )
         }
 
-        ToolOverflowMenu(viewModel: viewModel, selectTool: selectTool)
+        ToolOverflowMenu(viewModel: viewModel, primaryTools: primaryTools, selectTool: selectTool)
     }
 
     private func selectTool(_ tool: ToolType) {
@@ -114,9 +126,10 @@ struct ToolbarView: View {
 
 private struct ToolOverflowMenu: View {
     @ObservedObject var viewModel: CanvasViewModel
+    let primaryTools: [ToolType]
     let selectTool: (ToolType) -> Void
 
-    private let secondaryTools: [ToolType] = [
+    private static let allSecondaryTools: [ToolType] = [
         .select,
         .marker,
         .eraser,
@@ -126,6 +139,11 @@ private struct ToolOverflowMenu: View {
         .line,
         .sticker
     ]
+
+    /// Whatever isn't already a button in the bar.
+    private var secondaryTools: [ToolType] {
+        Self.allSecondaryTools.filter { !primaryTools.contains($0) }
+    }
 
     var body: some View {
         Menu {
@@ -200,6 +218,8 @@ private struct ToolbarIconButton: View {
         case "arrow.uturn.forward": return "Redo"
         case "hand.raised": return "Pan tool"
         case "pencil": return "Pencil tool"
+        case "highlighter": return "Marker tool"
+        case "eraser": return "Eraser tool"
         case "slider.horizontal.3": return "Tool adjustments"
         default: return icon
         }
@@ -211,6 +231,8 @@ private struct ToolbarIconButton: View {
         case "arrow.uturn.forward": return "Tap to redo last action"
         case "hand.raised": return "Tap to pan the canvas"
         case "pencil": return "Tap to draw with pencil"
+        case "highlighter": return "Tap to highlight"
+        case "eraser": return "Tap to erase"
         case "slider.horizontal.3": return "Shows or hides settings for the selected tool"
         default: return "Tap to use this control"
         }

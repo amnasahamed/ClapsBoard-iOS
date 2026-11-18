@@ -22,7 +22,47 @@ struct ClapsboardApp: App {
                 .onAppear {
                     notificationManager.refreshAuthorizationStatus()
                 }
+                // The app declares PDF and PowerPoint support, so "Open in
+                // ClapsBoard" from Files, Mail or the share sheet must work.
+                .onOpenURL { url in
+                    if DocumentInbox.importFile(at: url) { appState.selectedTab = .docs }
+                }
         }
+    }
+}
+
+// MARK: - Document Inbox
+/// Copies documents opened from other apps into the Docs folder.
+enum DocumentInbox {
+    static let didImport = Notification.Name("ClapsBoardDocumentImported")
+
+    @discardableResult
+    static func importFile(at url: URL) -> Bool {
+        guard url.isFileURL else { return false }
+        let fileManager = FileManager.default
+        guard let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else { return false }
+        let folder = documents.appendingPathComponent("ClapsBoard Documents", isDirectory: true)
+        try? fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        let baseName = url.deletingPathExtension().lastPathComponent
+        let ext = url.pathExtension
+        var destination = folder.appendingPathComponent(url.lastPathComponent)
+        var counter = 1
+        while fileManager.fileExists(atPath: destination.path) {
+            destination = folder.appendingPathComponent("\(baseName)_\(counter).\(ext)")
+            counter += 1
+        }
+        do {
+            try fileManager.copyItem(at: url, to: destination)
+        } catch {
+            print("❌ Could not import opened document: \(error.localizedDescription)")
+            return false
+        }
+        NotificationCenter.default.post(name: didImport, object: nil)
+        return true
     }
 }
 
@@ -57,6 +97,12 @@ class AppState: ObservableObject {
 class NotificationManager: ObservableObject {
     @Published var isAuthorized = false
 
+    /// Settings → Reminders (stored with @AppStorage in SettingsView).
+    static let remindersEnabledKey = "classRemindersEnabled"
+    static let reminderMinutesKey = "classReminderMinutesBefore"
+    private var remindersEnabled: Bool { UserDefaults.standard.object(forKey: Self.remindersEnabledKey) as? Bool ?? true }
+    private var minutesBefore: Int { (UserDefaults.standard.object(forKey: Self.reminderMinutesKey) as? Int) ?? 5 }
+
     init() {
         refreshAuthorizationStatus()
     }
@@ -79,6 +125,7 @@ class NotificationManager: ObservableObject {
     }
     
     func scheduleClassNotification(for classSession: ClassSession) {
+        guard remindersEnabled else { return }
         if isAuthorized {
             addNotificationRequest(for: classSession)
             return
@@ -91,12 +138,13 @@ class NotificationManager: ObservableObject {
     }
 
     private func addNotificationRequest(for classSession: ClassSession) {
-        let classDate = classSession.date.addingTimeInterval(-5 * 60)
+        let minutes = minutesBefore
+        let classDate = classSession.date.addingTimeInterval(-Double(minutes) * 60)
         guard classDate > Date() else { return }
 
         let content = UNMutableNotificationContent()
         content.title = "Class Starting Soon"
-        content.body = "\(classSession.title) starts in 5 minutes"
+        content.body = "\(classSession.title) starts in \(minutes) minutes"
         content.sound = .default
         
         let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: classDate)
@@ -106,6 +154,11 @@ class NotificationManager: ObservableObject {
         UNUserNotificationCenter.current().add(request)
     }
     
+    /// Class reminders are the only notifications this app schedules.
+    func cancelAllClassReminders() {
+        UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
+    }
+
     func cancelNotification(for classId: UUID) {
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [classId.uuidString])
     }

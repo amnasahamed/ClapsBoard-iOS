@@ -23,17 +23,24 @@ class CanvasViewModel: ObservableObject {
         }
     }
     @Published var color: Color = DrawingConstants.defaultColor
-    @Published var strokeWidth: CGFloat = DrawingConstants.defaultStrokeWidth
+    // Settings → Board → Default stroke.
+    @Published var strokeWidth: CGFloat = (UserDefaults.standard.object(forKey: "defaultStrokeWidth") as? Double).map { CGFloat($0) } ?? DrawingConstants.defaultStrokeWidth
     @Published var eraserSize: CGFloat = DrawingConstants.eraserSize
     @Published var textAlign: TextAlignment = .left
     @Published var currentSticker: String = DrawingConstants.stickers[0]
     @Published var gridStyle: GridStyle = .none
     @Published var showProperties: Bool = false
     @Published var isDrawing: Bool = false
+    @Published var activeLayer: AnswerLayer = .base
+    @Published var visibleLayers: Set<AnswerLayer> = [.base]
     
     // MARK: - Elements
     @Published var elements: [DrawingElement] = []
     @Published var selectedElement: DrawingElement?
+    /// True while a finger is moving or resizing the selected element. The
+    /// board reads it so the same drag doesn't also pan the canvas. Not
+    /// published: it changes mid-gesture and nothing needs to redraw for it.
+    var isManipulatingSelection = false
     
     // MARK: - Canvas Transform
     @Published var zoom: CGFloat = 1.0
@@ -76,8 +83,14 @@ class CanvasViewModel: ObservableObject {
     
     // MARK: - Element Management
     func addElement(_ element: DrawingElement) {
-        elements.append(element)
+        var layeredElement = element
+        layeredElement.layer = activeLayer
+        elements.append(layeredElement)
         commitChange()
+    }
+
+    func isVisible(_ element: DrawingElement) -> Bool {
+        visibleLayers.contains(element.layer ?? .base)
     }
     
     func updateElement(_ element: DrawingElement) {
@@ -208,6 +221,19 @@ class CanvasViewModel: ObservableObject {
         self.elements = loadedElements
         self.history = [loadedElements]
     }
+
+    /// Loads a saved lesson page and starts a fresh undo history for that page.
+    func loadLessonPage(_ page: LessonPage) {
+        elements = page.elements
+        gridStyle = page.gridStyle
+        selectedElement = nil
+        history = [page.elements]
+        historyDescriptions = ["Opened \(page.title)"]
+        historyIndex = 0
+        zoom = 1
+        pan = .zero
+        saveElements()
+    }
     
     // MARK: - Export
     
@@ -299,7 +325,7 @@ class CanvasViewModel: ObservableObject {
         }
         
         // Capture state before going to background thread
-        let elementsSnapshot = elements.filter { !$0.isDeleted }
+        let elementsSnapshot = elements.filter { !$0.isDeleted && isVisible($0) }
         let exportGridStyle = gridStyle
         
         // Preload all image data on main thread
@@ -336,7 +362,7 @@ class CanvasViewModel: ObservableObject {
         
         guard exportBounds.width > 0, exportBounds.height > 0 else { return nil }
         
-        let elementsSnapshot = elements.filter { !$0.isDeleted }
+        let elementsSnapshot = elements.filter { !$0.isDeleted && isVisible($0) }
         
         // Preload images
         var preloadedImages: [UUID: UIImage] = [:]
@@ -352,6 +378,35 @@ class CanvasViewModel: ObservableObject {
             gridStyle: gridStyle,
             preloadedImages: preloadedImages
         )
+    }
+
+    /// Renders a saved page without changing the currently displayed page.
+    func exportImage(elements pageElements: [DrawingElement], gridStyle pageGridStyle: GridStyle) -> UIImage? {
+        let liveElements = pageElements.filter { !$0.isDeleted && visibleLayers.contains($0.layer ?? .base) }
+        let bounds = boundsForExport(elements: liveElements) ?? CGRect(x: 0, y: 0, width: 1280, height: 720)
+        var images: [UUID: UIImage] = [:]
+        for element in liveElements where element.type == .image {
+            if let data = element.imageData, let image = UIImage(data: data) { images[element.id] = image }
+        }
+        return renderExportImage(bounds: bounds, elements: liveElements, gridStyle: pageGridStyle, preloadedImages: images)
+    }
+
+    private func boundsForExport(elements: [DrawingElement]) -> CGRect? {
+        guard !elements.isEmpty else { return nil }
+        var result = CGRect.null
+        for element in elements {
+            var rect: CGRect
+            if !element.points.isEmpty {
+                let xs = element.points.map(\.x), ys = element.points.map(\.y)
+                rect = CGRect(x: xs.min() ?? 0, y: ys.min() ?? 0,
+                              width: max(1, (xs.max() ?? 0) - (xs.min() ?? 0)),
+                              height: max(1, (ys.max() ?? 0) - (ys.min() ?? 0)))
+            } else {
+                rect = CGRect(x: element.x, y: element.y, width: max(1, element.width), height: max(1, element.height))
+            }
+            result = result.union(rect.insetBy(dx: -max(20, element.strokeWidth), dy: -max(20, element.strokeWidth)))
+        }
+        return result.isNull ? nil : result.insetBy(dx: -40, dy: -40)
     }
     
     /// Core rendering logic - thread-safe
@@ -511,14 +566,13 @@ class CanvasViewModel: ObservableObject {
         
         switch element.type {
         case .pen, .marker:
+            // Match DrawingCanvas, which renders strokes at the element's own
+            // opacity (that is what makes the highlighter translucent).
+            context.setAlpha(element.opacity)
             if element.points.count == 1 {
                 let point = element.points[0]
                 let r = element.strokeWidth / 2
                 let rect = CGRect(x: point.x - r, y: point.y - r, width: r * 2, height: r * 2)
-                
-                if element.type == .marker {
-                    context.setAlpha(0.4)
-                }
                 
                 color.setFill()
                 let path = UIBezierPath(ovalIn: rect)
@@ -543,6 +597,8 @@ class CanvasViewModel: ObservableObject {
                 path.addLine(to: element.points[1])
             }
             
+            // Without this the stroke used the context's default black.
+            color.setStroke()
             path.lineWidth = element.strokeWidth
             path.lineCapStyle = .round
             path.lineJoinStyle = .round
@@ -639,6 +695,8 @@ class StorageService {
     private let fileManager = FileManager.default
     private let fileName = "whiteboard_elements.json"
     private let mediaDirectoryName = "WhiteboardMedia"
+    /// Serial, so an older snapshot can never be written after a newer one.
+    private let saveQueue = DispatchQueue(label: "com.clapsboard.storage.elements", qos: .utility)
     
     private var documentsDirectory: URL {
         fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -702,7 +760,7 @@ class StorageService {
     }
     
     func saveElements(_ elements: [DrawingElement]) {
-        DispatchQueue.global(qos: .background).async {
+        saveQueue.async {
             do {
                 let data = try JSONEncoder().encode(elements)
                 try data.write(to: self.fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])

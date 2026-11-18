@@ -1,0 +1,9 @@
+{
+  "id" : "0973cd5b-df56-49ef-9382-dd95773e31e6",
+  "targets" : [
+    {
+      "id" : "25F4F693-01CD-4D75-9939-75536EEA2353",
+      "name" : "ClapsBoard"
+    }
+  ]
+}

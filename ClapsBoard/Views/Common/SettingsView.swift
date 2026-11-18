@@ -20,15 +20,14 @@ struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var notificationManager: NotificationManager
 
-    @State private var enableNotifications = true
-    @State private var notifyMinutesBefore = 5
-    @State private var autoSaveEnabled = true
+    // Read by NotificationManager when scheduling class reminders.
+    @AppStorage(NotificationManager.remindersEnabledKey) private var enableNotifications = true
+    @AppStorage(NotificationManager.reminderMinutesKey) private var notifyMinutesBefore = 5
     @State private var showPrivacyPolicy = false
     @State private var showSupportSheet = false
     @State private var showTermsOfService = false
     @State private var showDataInfo = false
 
-    @AppStorage("gridSize") private var gridSize: Double = 40
     @AppStorage("defaultStrokeWidth") private var defaultStrokeWidth: Double = 3
 
     var body: some View {
@@ -61,18 +60,6 @@ struct SettingsView: View {
                             VStack(spacing: 18) {
                                 SettingsSection(title: "Board") {
                                     SettingsSliderRow(
-                                        icon: "grid",
-                                        iconColor: AppTheme.accent,
-                                        title: "Grid size",
-                                        value: $gridSize,
-                                        range: 20...80,
-                                        step: 10,
-                                        valueFormatter: { "\(Int($0)) px" }
-                                    )
-
-                                    SettingsDivider()
-
-                                    SettingsSliderRow(
                                         icon: "pencil.tip",
                                         iconColor: Color(hex: "F59E0B"),
                                         title: "Default stroke",
@@ -80,16 +67,6 @@ struct SettingsView: View {
                                         range: 1...10,
                                         step: 1,
                                         valueFormatter: { "\(Int($0)) px" }
-                                    )
-
-                                    SettingsDivider()
-
-                                    SettingsToggleRow(
-                                        icon: "arrow.triangle.2.circlepath",
-                                        iconColor: Color(hex: "34A853"),
-                                        title: "Auto-save board",
-                                        subtitle: "Keep work available between sessions",
-                                        isOn: $autoSaveEnabled
                                     )
                                 }
 
@@ -101,6 +78,9 @@ struct SettingsView: View {
                                         subtitle: "Notification alerts for planned sessions",
                                         isOn: $enableNotifications
                                     )
+                                    .onChange(of: enableNotifications) { _, enabled in
+                                        if !enabled { notificationManager.cancelAllClassReminders() }
+                                    }
 
                                     if enableNotifications {
                                         SettingsDivider()
@@ -557,7 +537,7 @@ struct PrivacyPolicyView: View {
                     Text("Privacy Policy")
                         .font(.title.weight(.bold))
 
-                    Text("Last updated: January 2026")
+                    Text("Last updated: October 2026")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
 
@@ -580,6 +560,9 @@ struct PrivacyPolicyView: View {
                             DataRowView(icon: "camera", title: "Camera", description: "Used only for live mirror feature, never recorded or stored")
                             DataRowView(icon: "mic", title: "Voice Channel", description: "Live audio is sent peer-to-peer to connected nearby participants only during an active channel")
                             DataRowView(icon: "photo", title: "Photos", description: "Accessed only when you import images")
+                            DataRowView(icon: "person.2", title: "Student Records", description: "Student names, notes, homework and lesson history you enter are stored locally on your device only")
+                            DataRowView(icon: "bell", title: "Reminders", description: "Class reminders are scheduled on your device; nothing is sent to a server")
+                            DataRowView(icon: "wifi", title: "Local Network", description: "Used only to find nearby devices for the Voice Channel")
                         }
                         .padding(.vertical, 8)
                     }
@@ -625,7 +608,7 @@ struct PrivacyPolicyView: View {
                         Text("If you have questions about this policy, please contact us at:")
 
                         Link("amnasahmd@gmail.com", destination: URL(string: "mailto:amnasahmd@gmail.com")!)
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(AppTheme.accent)
                     }
                 }
                 .padding(20)
@@ -649,7 +632,7 @@ struct DataRowView: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: icon)
-                .foregroundStyle(.blue)
+                .foregroundStyle(AppTheme.accent)
                 .frame(width: 24)
             
             VStack(alignment: .leading, spacing: 2) {
@@ -724,7 +707,7 @@ struct TermsOfServiceView: View {
                         Text("For questions about these terms, contact us at:")
 
                         Link("amnasahmd@gmail.com", destination: URL(string: "mailto:amnasahmd@gmail.com")!)
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(AppTheme.accent)
                     }
                 }
                 .padding(20)
@@ -767,7 +750,7 @@ struct DataInfoView: View {
                             icon: "icloud.slash",
                             title: "No Cloud Sync",
                             description: "Your data is not uploaded to any cloud service.",
-                            color: .blue
+                            color: AppTheme.accent
                         )
 
                         DataStorageCard(
@@ -860,7 +843,7 @@ struct SupportView: View {
                 VStack(spacing: 24) {
                     Image(systemName: "person.crop.circle.badge.questionmark")
                         .font(.system(size: 60))
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(AppTheme.accent)
 
                     Text("Need Help?")
                         .font(.title2.weight(.bold))
@@ -899,7 +882,7 @@ struct SupportView: View {
                                 .font(.subheadline.weight(.medium))
                             Text("amnasahmd@gmail.com")
                                 .font(.caption)
-                                .foregroundStyle(.blue)
+                                .foregroundStyle(AppTheme.accent)
                             Text("https://clapsboard.com")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)

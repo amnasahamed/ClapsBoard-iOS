@@ -8,8 +8,10 @@
 import SwiftUI
 
 enum AppTheme {
-    static let accent = Color(hex: "6B8CFF")
-    static let accentSoft = Color(hex: "6B8CFF").opacity(0.14)
+    /// Shared brand blue (same as Android). White text on it is 5.2:1 and it
+    /// is 5.2:1 as text on white, so both pass WCAG AA.
+    static let accent = Color(hex: "3566D6")
+    static let accentSoft = Color(hex: "3566D6").opacity(0.12)
     static let canvasBase = Color(hex: "FBFAF7")
     static let canvasWarmth = Color(hex: "F1EEE7")
 }
@@ -131,8 +133,28 @@ enum TextAlignment: String, CaseIterable, Codable {
     }
 }
 
+enum AnswerLayer: String, CaseIterable, Codable, Hashable {
+    case base, hint, solution
+
+    var title: String {
+        switch self {
+        case .base: return "Board"
+        case .hint: return "Hints"
+        case .solution: return "Solutions"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .base: return "square.on.square"
+        case .hint: return "lightbulb"
+        case .solution: return "checkmark.seal"
+        }
+    }
+}
+
 // MARK: - Drawing Element
-struct DrawingElement: Identifiable, Codable {
+struct DrawingElement: Identifiable, Codable, Equatable {
     let id: UUID
     var type: ToolType
     var points: [CGPoint]
@@ -148,6 +170,7 @@ struct DrawingElement: Identifiable, Codable {
     var rotation: CGFloat
     var isDeleted: Bool
     var textAlign: TextAlignment
+    var layer: AnswerLayer?
     
     init(
         id: UUID = UUID(),
@@ -164,7 +187,8 @@ struct DrawingElement: Identifiable, Codable {
         opacity: CGFloat = 1,
         rotation: CGFloat = 0,
         isDeleted: Bool = false,
-        textAlign: TextAlignment = .left
+        textAlign: TextAlignment = .left,
+        layer: AnswerLayer = .base
     ) {
         self.id = id
         self.type = type
@@ -196,11 +220,12 @@ struct DrawingElement: Identifiable, Codable {
         self.rotation = rotation
         self.isDeleted = isDeleted
         self.textAlign = textAlign
+        self.layer = layer
     }
 }
 
 // MARK: - Codable Color
-struct CodableColor: Codable {
+struct CodableColor: Codable, Equatable {
     let red: Double
     let green: Double
     let blue: Double
@@ -280,5 +305,213 @@ extension Color {
                       Int(r * 255),
                       Int(g * 255),
                       Int(b * 255))
+    }
+}
+
+// MARK: - Offline Lesson Workspace
+struct StudentFolder: Identifiable, Codable, Equatable {
+    let id: UUID
+    var name: String
+    var colorHex: String
+    let createdAt: Date
+    var notes: String?
+    var documentNames: [String]?
+    var homework: [HomeworkItem]?
+    var lessonHistory: [LessonHistoryItem]?
+}
+
+struct HomeworkItem: Identifiable, Codable, Equatable {
+    let id: UUID
+    var title: String
+    var isComplete: Bool
+    let createdAt: Date
+}
+
+struct LessonHistoryItem: Identifiable, Codable, Equatable {
+    let id: UUID
+    var lessonId: UUID
+    var lessonTitle: String
+    let startedAt: Date
+    var finishedAt: Date?
+    var durationSeconds: Int?
+}
+
+struct LessonPage: Identifiable, Codable {
+    let id: UUID
+    var title: String
+    var elements: [DrawingElement]
+    var gridStyle: GridStyle
+    let createdAt: Date
+    var updatedAt: Date
+}
+
+struct TutorLesson: Identifiable, Codable {
+    let id: UUID
+    var studentId: UUID
+    var title: String
+    var pages: [LessonPage]
+    var activePageId: UUID
+    let createdAt: Date
+    var updatedAt: Date
+}
+
+private struct LessonWorkspaceData: Codable {
+    var version: Int
+    var students: [StudentFolder]
+    var lessons: [TutorLesson]
+    var activeLessonId: UUID
+}
+
+@MainActor
+final class LessonStore: ObservableObject {
+    @Published private(set) var students: [StudentFolder] = []
+    @Published private(set) var lessons: [TutorLesson] = []
+    @Published private(set) var activeLessonId: UUID
+
+    private let fileManager = FileManager.default
+    private let workspaceURL: URL
+    private let recoveryURL: URL
+    /// Encoding and writing run here, debounced, instead of on the main thread
+    /// for every stroke, eraser hit and drag frame. Serial, so writes land in order.
+    private let saveQueue = DispatchQueue(label: "com.clapsboard.lessonStore.save", qos: .utility)
+    private var pendingSave: DispatchWorkItem?
+    private static let saveDelay: TimeInterval = 0.4
+    private var backgroundObservers: [NSObjectProtocol] = []
+
+    var activeLesson: TutorLesson {
+        lessons.first(where: { $0.id == activeLessonId }) ?? lessons[0]
+    }
+
+    var activePage: LessonPage {
+        let lesson = activeLesson
+        return lesson.pages.first(where: { $0.id == lesson.activePageId }) ?? lesson.pages[0]
+    }
+
+    init() {
+        let directory = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("ClapsBoard", isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        workspaceURL = directory.appendingPathComponent("lesson-workspace-v1.json")
+        recoveryURL = directory.appendingPathComponent("lesson-workspace-v1-recovery.json")
+
+        if let data = Self.loadData(from: workspaceURL) ?? Self.loadData(from: recoveryURL),
+           data.version == 1, !data.students.isEmpty, !data.lessons.isEmpty {
+            students = data.students
+            lessons = data.lessons
+            activeLessonId = data.lessons.contains(where: { $0.id == data.activeLessonId }) ? data.activeLessonId : data.lessons[0].id
+        } else {
+            let student = StudentFolder(id: UUID(), name: "General", colorHex: "3566D6", createdAt: Date(), notes: "", documentNames: [], homework: [], lessonHistory: [])
+            let legacy = StorageService.shared.loadElements()
+            let page = LessonPage(id: UUID(), title: "Page 1", elements: legacy, gridStyle: .none, createdAt: Date(), updatedAt: Date())
+            let lesson = TutorLesson(id: UUID(), studentId: student.id, title: "My Board", pages: [page], activePageId: page.id, createdAt: Date(), updatedAt: Date())
+            students = [student]
+            lessons = [lesson]
+            activeLessonId = lesson.id
+            save()
+        }
+
+        // Don't leave the last edits waiting on the debounce if iOS suspends
+        // or kills the app.
+        for name in [UIApplication.didEnterBackgroundNotification, UIApplication.willTerminateNotification] {
+            backgroundObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.flushPendingSave() }
+            })
+        }
+    }
+
+    deinit {
+        backgroundObservers.forEach(NotificationCenter.default.removeObserver)
+    }
+
+    private static func loadData(from url: URL) -> LessonWorkspaceData? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(LessonWorkspaceData.self, from: data)
+    }
+
+    private var snapshot: LessonWorkspaceData {
+        LessonWorkspaceData(version: 1, students: students, lessons: lessons, activeLessonId: activeLessonId)
+    }
+
+    private nonisolated static func write(_ snapshot: LessonWorkspaceData, to workspaceURL: URL, recoveryURL: URL) {
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        try? data.write(to: recoveryURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        try? data.write(to: workspaceURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    private func save() {
+        pendingSave?.cancel()
+        // Capture the snapshot now (copy-on-write, cheap); encode it later.
+        let snapshot = snapshot, workspaceURL = workspaceURL, recoveryURL = recoveryURL
+        let item = DispatchWorkItem { Self.write(snapshot, to: workspaceURL, recoveryURL: recoveryURL) }
+        pendingSave = item
+        saveQueue.asyncAfter(deadline: .now() + Self.saveDelay, execute: item)
+    }
+
+    /// Writes any debounced save immediately and waits for it to finish.
+    func flushPendingSave() {
+        guard let pending = pendingSave else { return }
+        pendingSave = nil
+        pending.cancel()
+        let snapshot = snapshot, workspaceURL = workspaceURL, recoveryURL = recoveryURL
+        saveQueue.sync { Self.write(snapshot, to: workspaceURL, recoveryURL: recoveryURL) }
+    }
+
+    func addStudent(name: String) -> StudentFolder {
+        let student = StudentFolder(id: UUID(), name: name.trimmingCharacters(in: .whitespacesAndNewlines), colorHex: "3566D6", createdAt: Date(), notes: "", documentNames: [], homework: [], lessonHistory: [])
+        students.append(student); save(); return student
+    }
+
+    func updateStudent(_ student: StudentFolder) {
+        guard let index = students.firstIndex(where: { $0.id == student.id }) else { return }
+        students[index] = student
+        save()
+    }
+
+    func addLesson(studentId: UUID, title: String) -> TutorLesson {
+        let page = LessonPage(id: UUID(), title: "Page 1", elements: [], gridStyle: .none, createdAt: Date(), updatedAt: Date())
+        let lesson = TutorLesson(id: UUID(), studentId: studentId, title: title.trimmingCharacters(in: .whitespacesAndNewlines), pages: [page], activePageId: page.id, createdAt: Date(), updatedAt: Date())
+        lessons.append(lesson); activeLessonId = lesson.id; save(); return lesson
+    }
+
+    func openLesson(_ id: UUID) {
+        guard lessons.contains(where: { $0.id == id }) else { return }
+        activeLessonId = id; save()
+    }
+
+    func deleteLesson(_ id: UUID) {
+        guard lessons.count > 1 else { return }
+        lessons.removeAll { $0.id == id }
+        if activeLessonId == id { activeLessonId = lessons[0].id }
+        save()
+    }
+
+    func openPage(_ id: UUID) {
+        guard let lessonIndex = lessons.firstIndex(where: { $0.id == activeLessonId }), lessons[lessonIndex].pages.contains(where: { $0.id == id }) else { return }
+        lessons[lessonIndex].activePageId = id; save()
+    }
+
+    @discardableResult func addPage() -> LessonPage {
+        let lessonIndex = lessons.firstIndex(where: { $0.id == activeLessonId })!
+        let page = LessonPage(id: UUID(), title: "Page \(lessons[lessonIndex].pages.count + 1)", elements: [], gridStyle: lessons[lessonIndex].pages.last?.gridStyle ?? .none, createdAt: Date(), updatedAt: Date())
+        lessons[lessonIndex].pages.append(page); lessons[lessonIndex].activePageId = page.id; lessons[lessonIndex].updatedAt = Date(); save(); return page
+    }
+
+    func deleteActivePage() {
+        guard let lessonIndex = lessons.firstIndex(where: { $0.id == activeLessonId }), lessons[lessonIndex].pages.count > 1 else { return }
+        let pageId = lessons[lessonIndex].activePageId
+        let oldIndex = lessons[lessonIndex].pages.firstIndex(where: { $0.id == pageId }) ?? 0
+        lessons[lessonIndex].pages.removeAll { $0.id == pageId }
+        lessons[lessonIndex].activePageId = lessons[lessonIndex].pages[min(oldIndex, lessons[lessonIndex].pages.count - 1)].id
+        lessons[lessonIndex].updatedAt = Date(); save()
+    }
+
+    func updateActivePage(elements: [DrawingElement], gridStyle: GridStyle) {
+        guard let lessonIndex = lessons.firstIndex(where: { $0.id == activeLessonId }),
+              let pageIndex = lessons[lessonIndex].pages.firstIndex(where: { $0.id == lessons[lessonIndex].activePageId }) else { return }
+        lessons[lessonIndex].pages[pageIndex].elements = elements
+        lessons[lessonIndex].pages[pageIndex].gridStyle = gridStyle
+        lessons[lessonIndex].pages[pageIndex].updatedAt = Date()
+        lessons[lessonIndex].updatedAt = Date()
+        save()
     }
 }
