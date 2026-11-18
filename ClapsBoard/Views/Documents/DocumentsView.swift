@@ -40,9 +40,45 @@ actor ThumbnailCache {
     }
 }
 
+// MARK: - Supported Documents
+/// The ONE list of file types Docs works with. The grid filter, the Files
+/// picker, drag-and-drop and the icons are all derived from it, so a type can
+/// no longer be importable but invisible after the next reload.
+enum SupportedDocuments {
+    static let kinds: [String: DocumentType] = [
+        "pdf": .pdf,
+        "doc": .word, "docx": .word, "pages": .word,
+        "ppt": .powerpoint, "pptx": .powerpoint, "key": .powerpoint,
+        "xls": .excel, "xlsx": .excel, "numbers": .excel, "csv": .excel,
+        "txt": .text, "rtf": .text, "md": .text,
+        "jpg": .image, "jpeg": .image, "png": .image, "heic": .image, "heif": .image,
+        "gif": .image, "webp": .image, "tiff": .image, "tif": .image, "bmp": .image
+    ]
+
+    static func isSupported(extension ext: String) -> Bool {
+        kinds[ext.lowercased()] != nil
+    }
+
+    /// Picker / drop types: one per extension above, plus the two Word types
+    /// by identifier (they must be offered even if the extension lookup fails).
+    static let contentTypes: [UTType] = {
+        var types = kinds.keys.sorted().compactMap { UTType(filenameExtension: $0) }
+        types += [UTType("com.microsoft.word.doc"), UTType("org.openxmlformats.wordprocessingml.document")].compactMap { $0 }
+        var seen = Set<String>()
+        return types.filter { seen.insert($0.identifier).inserted }
+    }()
+
+    /// The extension to save a dropped/picked item under, or nil if unsupported.
+    static func fileExtension(for type: UTType) -> String? {
+        if let ext = type.preferredFilenameExtension?.lowercased(), isSupported(extension: ext) { return ext }
+        return type.tags[.filenameExtension]?.map { $0.lowercased() }.first(where: isSupported(extension:))
+    }
+}
+
 /// Document viewer for PDFs and other documents (HIG: Empty States, Accessibility)
 struct DocumentsView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var documents: [DocumentItem] = []
     @State private var selectedDocument: DocumentItem?
@@ -56,6 +92,7 @@ struct DocumentsView: View {
     @State private var isDropTargeted = false
     @State private var errorMessage: String?
     @State private var showError = false
+    @State private var showCameraDenied = false
     
     // Check if camera is available on this device
     private var isCameraAvailable: Bool {
@@ -168,7 +205,7 @@ struct DocumentsView: View {
             // Only show camera option if camera is available
             if isCameraAvailable {
                 Button {
-                    showCamera = true
+                    startCameraCapture()
                 } label: {
                     Label("Take Photo", systemImage: "camera")
                 }
@@ -216,6 +253,25 @@ struct DocumentsView: View {
         .onAppear {
             loadDocuments()
         }
+        // This view stays alive behind the other tabs, so onAppear runs only
+        // once. Reload when Docs is shown again and when the app comes back
+        // (files can be added or removed in the Files app meanwhile).
+        .onChange(of: appState.selectedTab) { _, tab in
+            if tab == .docs { loadDocuments() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { loadDocuments() }
+        }
+        .alert("Camera Access Required", isPresented: $showCameraDenied) {
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Allow camera access in Settings to take a photo into Docs.")
+        }
         .onReceive(NotificationCenter.default.publisher(for: DocumentInbox.didImport)) { _ in
             loadDocuments()
         }
@@ -225,9 +281,38 @@ struct DocumentsView: View {
             Text(errorMessage ?? "An unknown error occurred")
         }
         // Drop support for drag and drop
-        .onDrop(of: [.image, .pdf, .data], isTargeted: $isDropTargeted) { providers in
+        // Only the types Docs can actually keep are accepted.
+        .onDrop(of: SupportedDocuments.contentTypes, isTargeted: $isDropTargeted) { providers in
             handleDrop(providers: providers)
             return true
+        }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(AppTheme.accent, style: StrokeStyle(lineWidth: 3, dash: [10, 6]))
+                    .background(AppTheme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .padding(8)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    // MARK: - Camera permission
+
+    /// The system camera UI shows a black screen when access is denied, so
+    /// check first and explain how to turn it on.
+    private func startCameraCapture() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            showCamera = true
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                DispatchQueue.main.async {
+                    if granted { showCamera = true } else { showCameraDenied = true }
+                }
+            }
+        default:
+            showCameraDenied = true
         }
     }
     
@@ -262,12 +347,8 @@ struct DocumentsView: View {
         do {
             let files = try fileManager.contentsOfDirectory(at: clapsboardDocsPath, includingPropertiesForKeys: [.nameKey, .creationDateKey, .contentModificationDateKey])
             documents = files.compactMap { url in
-                let ext = url.pathExtension.lowercased()
-                // Must cover every type the picker and "Open in ClapsBoard" accept,
-                // or imported files disappear on the next reload.
-                guard ["pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "txt", "jpg", "jpeg", "png", "heic", "gif", "webp"].contains(ext) else { return nil }
+                guard SupportedDocuments.isSupported(extension: url.pathExtension) else { return nil }
                 return DocumentItem(
-                    id: UUID(),
                     name: url.deletingPathExtension().lastPathComponent,
                     url: url,
                     type: DocumentType(from: url.pathExtension),
@@ -331,7 +412,6 @@ struct DocumentsView: View {
                     print("✅ Imported: \(url.lastPathComponent)")
                     
                     let document = DocumentItem(
-                        id: UUID(),
                         name: destinationURL.deletingPathExtension().lastPathComponent,
                         url: destinationURL,
                         type: DocumentType(from: url.pathExtension),
@@ -339,6 +419,7 @@ struct DocumentsView: View {
                     )
                     
                     await MainActor.run {
+                        documents.removeAll { $0.id == document.id }
                         documents.insert(document, at: 0)
                     }
                     successCount += 1
@@ -374,18 +455,10 @@ struct DocumentsView: View {
                         let timestamp = Int(Date().timeIntervalSince1970 * 1000)
                         
                         // Determine file extension from content type
-                        var fileExtension = "jpg"
-                        if let contentType = item.supportedContentTypes.first {
-                            if contentType.conforms(to: .png) {
-                                fileExtension = "png"
-                            } else if contentType.conforms(to: .heic) {
-                                fileExtension = "heic"
-                            } else if contentType.conforms(to: .gif) {
-                                fileExtension = "gif"
-                            } else if contentType.conforms(to: .webP) {
-                                fileExtension = "webp"
-                            }
-                        }
+                        // (from the shared list, so e.g. HEIF/TIFF keep their type)
+                        let fileExtension = item.supportedContentTypes
+                            .compactMap { SupportedDocuments.fileExtension(for: $0) }
+                            .first ?? "jpg"
                         
                         let fileName = "Photo_\(timestamp).\(fileExtension)"
                         let destinationURL = clapsboardDocsPath.appendingPathComponent(fileName)
@@ -393,7 +466,6 @@ struct DocumentsView: View {
                         try data.write(to: destinationURL)
                         
                         let document = DocumentItem(
-                            id: UUID(),
                             name: "Photo_\(timestamp)",
                             url: destinationURL,
                             type: .image,
@@ -436,7 +508,6 @@ struct DocumentsView: View {
                     try imageData.write(to: destinationURL)
                     
                     let document = DocumentItem(
-                        id: UUID(),
                         name: "Camera_\(timestamp)",
                         url: destinationURL,
                         type: .image,
@@ -468,86 +539,64 @@ struct DocumentsView: View {
         isProcessing = true
 
         Task {
-            var newDocuments: [DocumentItem] = []
-
+            var failed = 0
             for provider in providers {
-                // Handle images
-                if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
-                    if let document = await loadImageDocument(provider: provider) {
-                        newDocuments.append(document)
-                    }
-                }
-                // Handle PDFs
-                else if provider.hasItemConformingToTypeIdentifier(UTType.pdf.identifier) {
-                    if let document = await loadPDFDocument(provider: provider) {
-                        newDocuments.append(document)
-                    }
-                }
+                if !(await saveDroppedItem(from: provider)) { failed += 1 }
             }
 
-            // Update UI on main thread
             await MainActor.run {
-                documents.insert(contentsOf: newDocuments, at: 0)
+                loadDocuments()
                 isProcessing = false
-            }
-        }
-    }
-
-    private func loadImageDocument(provider: NSItemProvider) async -> DocumentItem? {
-        await withCheckedContinuation { continuation in
-            provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, error in
-                guard let data = data, error == nil else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-
-                let timestamp = Int(Date().timeIntervalSince1970 * 1000)
-                let fileName = "Dropped_\(timestamp).jpg"
-                let destinationURL = self.documentsDirectory.appendingPathComponent(fileName)
-
-                do {
-                    try data.write(to: destinationURL)
-                    let document = DocumentItem(
-                        id: UUID(),
-                        name: "Dropped_\(timestamp)",
-                        url: destinationURL,
-                        type: .image,
-                        dateAdded: Date()
-                    )
-                    continuation.resume(returning: document)
-                } catch {
-                    print("Error saving dropped image: \(error)")
-                    continuation.resume(returning: nil)
+                if failed > 0 {
+                    errorMessage = failed == 1
+                        ? "One dropped item could not be added. Docs accepts PDFs, Office and iWork files, text and images."
+                        : "\(failed) dropped items could not be added. Docs accepts PDFs, Office and iWork files, text and images."
+                    showError = true
                 }
             }
         }
     }
 
-    private func loadPDFDocument(provider: NSItemProvider) async -> DocumentItem? {
-        await withCheckedContinuation { continuation in
-            provider.loadDataRepresentation(forTypeIdentifier: UTType.pdf.identifier) { data, error in
-                guard let data = data, error == nil else {
-                    continuation.resume(returning: nil)
+    /// Copies one dropped item into Docs, keeping its own name and file type
+    /// (dropped PNG/HEIC images used to be written as ".jpg").
+    private func saveDroppedItem(from provider: NSItemProvider) async -> Bool {
+        // The provider's own types come first: they describe the real file.
+        let offered = provider.registeredTypeIdentifiers.compactMap { UTType($0) }
+        guard let type = offered.first(where: { SupportedDocuments.fileExtension(for: $0) != nil }),
+              let ext = SupportedDocuments.fileExtension(for: type) else { return false }
+
+        let folder = documentsDirectory
+        let suggestedName = provider.suggestedName
+
+        return await withCheckedContinuation { continuation in
+            provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in
+                // The temporary file only exists inside this callback.
+                guard let url else {
+                    continuation.resume(returning: false)
                     return
                 }
+                let fileManager = FileManager.default
+                let sourceExt = url.pathExtension.lowercased()
+                let finalExt = SupportedDocuments.isSupported(extension: sourceExt) ? sourceExt : ext
+                var baseName = (suggestedName ?? url.deletingPathExtension().lastPathComponent)
+                    .replacingOccurrences(of: "/", with: "-")
+                if baseName.lowercased().hasSuffix("." + finalExt) {
+                    baseName = String(baseName.dropLast(finalExt.count + 1))
+                }
+                if baseName.isEmpty { baseName = "Dropped_\(Int(Date().timeIntervalSince1970 * 1000))" }
 
-                let timestamp = Int(Date().timeIntervalSince1970 * 1000)
-                let fileName = "Dropped_\(timestamp).pdf"
-                let destinationURL = self.documentsDirectory.appendingPathComponent(fileName)
-
+                var destination = folder.appendingPathComponent("\(baseName).\(finalExt)")
+                var counter = 1
+                while fileManager.fileExists(atPath: destination.path) {
+                    destination = folder.appendingPathComponent("\(baseName)_\(counter).\(finalExt)")
+                    counter += 1
+                }
                 do {
-                    try data.write(to: destinationURL)
-                    let document = DocumentItem(
-                        id: UUID(),
-                        name: "Dropped_\(timestamp)",
-                        url: destinationURL,
-                        type: .pdf,
-                        dateAdded: Date()
-                    )
-                    continuation.resume(returning: document)
+                    try fileManager.copyItem(at: url, to: destination)
+                    continuation.resume(returning: true)
                 } catch {
-                    print("Error saving dropped PDF: \(error)")
-                    continuation.resume(returning: nil)
+                    print("Error saving dropped item: \(error)")
+                    continuation.resume(returning: false)
                 }
             }
         }
@@ -637,10 +686,14 @@ struct QuickLookPreview: UIViewControllerRepresentable {
     let onDismiss: () -> Void
 
     func makeUIViewController(context: Context) -> UINavigationController {
-        let preview = QLPreviewController()
+        let preview = DismissablePreviewController()
         preview.dataSource = context.coordinator
         preview.delegate = context.coordinator
-        preview.navigationItem.rightBarButtonItem = UIBarButtonItem(
+        // LEFT side: QuickLook fills the right side with its own share /
+        // markup items once the file loads, which could replace a Done placed
+        // there. This cover is full screen with no swipe-to-dismiss, so Done
+        // must never go missing.
+        preview.doneItem = UIBarButtonItem(
             barButtonSystemItem: .done,
             target: context.coordinator,
             action: #selector(Coordinator.dismissPreview)
@@ -671,7 +724,9 @@ struct QuickLookPreview: UIViewControllerRepresentable {
         }
 
         func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
-            parent.url as NSURL
+            // QuickLook rebuilds its bar items when it loads the item.
+            DispatchQueue.main.async { (controller as? DismissablePreviewController)?.assertDoneItem() }
+            return parent.url as NSURL
         }
 
         // Disable markup/editing: editing writes back to the file and was a
@@ -686,10 +741,44 @@ struct QuickLookPreview: UIViewControllerRepresentable {
     }
 }
 
+/// QLPreviewController that keeps our Done button on the left bar position
+/// whatever QuickLook does to the navigation item.
+final class DismissablePreviewController: QLPreviewController {
+    var doneItem: UIBarButtonItem? {
+        didSet { assertDoneItem() }
+    }
+
+    func assertDoneItem() {
+        guard let doneItem else { return }
+        // Guarded so the layout pass below cannot loop.
+        if navigationItem.leftBarButtonItems?.contains(doneItem) != true {
+            navigationItem.leftItemsSupplementBackButton = false
+            navigationItem.leftBarButtonItems = [doneItem]
+        }
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        assertDoneItem()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        assertDoneItem()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        assertDoneItem()
+    }
+}
+
 // MARK: - Document Item
 
 struct DocumentItem: Identifiable {
-    let id: UUID
+    /// The file's path: stable across reloads, so the grid keeps each card
+    /// (and its loaded thumbnail) instead of rebuilding everything.
+    var id: String { url.standardizedFileURL.path }
     let name: String
     let url: URL
     let type: DocumentType
@@ -700,15 +789,7 @@ enum DocumentType {
     case pdf, word, powerpoint, excel, text, image, other
     
     init(from extension: String) {
-        switch `extension`.lowercased() {
-        case "pdf": self = .pdf
-        case "doc", "docx": self = .word
-        case "ppt", "pptx": self = .powerpoint
-        case "xls", "xlsx": self = .excel
-        case "txt", "rtf": self = .text
-        case "jpg", "jpeg", "png", "heic", "gif", "webp": self = .image
-        default: self = .other
-        }
+        self = SupportedDocuments.kinds[`extension`.lowercased()] ?? .other
     }
     
     var iconName: String {
@@ -889,19 +970,8 @@ struct DocumentPicker: UIViewControllerRepresentable {
     let onPick: ([URL]) -> Void
     
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let supportedTypes: [UTType] = [
-            .pdf,
-            .presentation,
-            .spreadsheet,
-            .plainText,
-            .rtf,
-            .image,
-            .jpeg,
-            .png,
-            .heic,
-            .gif,
-            .webP
-        ]
+        // Same list the grid filters by (see SupportedDocuments).
+        let supportedTypes = SupportedDocuments.contentTypes
         
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: supportedTypes, asCopy: true)
         picker.allowsMultipleSelection = true

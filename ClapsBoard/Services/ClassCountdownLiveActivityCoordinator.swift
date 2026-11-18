@@ -7,16 +7,46 @@
 
 import ActivityKit
 import Foundation
+import UIKit
 
 @MainActor
 final class ClassCountdownLiveActivityCoordinator: ObservableObject {
     nonisolated static let countdownWindow: TimeInterval = 5 * 60
 
+    /// How long the "Starting now" state stays up after class start before the
+    /// system removes the activity.
+    nonisolated static let lingerAfterStart: TimeInterval = 3 * 60
+
     private var timer: Timer?
     private var sessions: [ClassSession] = []
+    /// Reconciles run one at a time. Two overlapping runs could both see "no
+    /// activity yet" and each request one, leaving a duplicate on the Lock Screen.
+    private var isReconciling = false
+    private var needsAnotherReconcile = false
+    /// Activities whose end has already been scheduled with the system.
+    private var scheduledEndActivityIDs: Set<String> = []
+
+    private var backgroundObserver: NSObjectProtocol?
+
+    init() {
+        // Once the app leaves the foreground it can be suspended and may never
+        // get to end the countdown itself, so hand the ending to the system then.
+        backgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.scheduleEndsForBackground()
+            }
+        }
+    }
 
     deinit {
         timer?.invalidate()
+        if let backgroundObserver {
+            NotificationCenter.default.removeObserver(backgroundObserver)
+        }
     }
 
     func startMonitoring(sessions: [ClassSession]) {
@@ -60,9 +90,18 @@ final class ClassCountdownLiveActivityCoordinator: ObservableObject {
     private func syncNow() {
         guard #available(iOS 16.2, *) else { return }
 
-        let snapshot = sessions
+        // Already running: remember to run once more with the latest sessions.
+        guard !isReconciling else {
+            needsAnotherReconcile = true
+            return
+        }
+        isReconciling = true
         Task {
-            await reconcileActivities(with: snapshot)
+            repeat {
+                needsAnotherReconcile = false
+                await reconcileActivities(with: sessions)
+            } while needsAnotherReconcile
+            isReconciling = false
         }
     }
 
@@ -74,7 +113,19 @@ final class ClassCountdownLiveActivityCoordinator: ObservableObject {
         }
 
         guard let candidate = Self.countdownCandidate(from: sessions) else {
-            await endAllActivities()
+            // No class in the countdown window. Activities whose end is already
+            // scheduled are left to the system, so "Starting now" stays for its
+            // few minutes; anything else (deleted or completed class) ends now.
+            let now = Date()
+            for activity in Activity<ClassCountdownAttributes>.activities {
+                let session = sessions.first { $0.id == activity.attributes.classId }
+                let justStarted = session.map {
+                    !$0.isCompleted && $0.date <= now && now.timeIntervalSince($0.date) < Self.lingerAfterStart
+                } ?? false
+                if justStarted, scheduledEndActivityIDs.contains(activity.id) { continue }
+                await activity.end(nil, dismissalPolicy: .immediate)
+                scheduledEndActivityIDs.remove(activity.id)
+            }
             return
         }
 
@@ -88,9 +139,14 @@ final class ClassCountdownLiveActivityCoordinator: ObservableObject {
             title: candidate.title.isEmpty ? "Class" : candidate.title,
             scheduledStart: candidate.date
         )
-        let content = ActivityContent(state: state, staleDate: candidate.date.addingTimeInterval(60))
+        // Stale exactly at class start: the widget uses `isStale` to switch to
+        // its "Starting now" look without the app having to run.
+        let content = ActivityContent(state: state, staleDate: candidate.date)
 
         if let existing = activeActivities.first(where: { $0.attributes.classId == candidate.id }) {
+            // Only touch it when something changed (title or time edited);
+            // an update would cancel the end already scheduled below.
+            guard existing.content.state != state else { return }
             await existing.update(content)
             return
         }
@@ -100,6 +156,30 @@ final class ClassCountdownLiveActivityCoordinator: ObservableObject {
             _ = try Activity.request(attributes: attributes, content: content, pushType: nil)
         } catch {
             print("Failed to start class countdown Live Activity: \(error.localizedDescription)")
+        }
+    }
+
+    /// Called when the app enters the background. Ending with a dismissal date
+    /// lets the system keep the countdown on the Lock Screen, mark it stale at
+    /// class start ("Starting now") and remove it a few minutes later, even if
+    /// ClapsBoard never runs again. Previously it sat at 0:00 until the app was
+    /// next opened. Trade-off: an ended activity leaves the Dynamic Island, so
+    /// while the app is in the background the countdown is Lock Screen only.
+    private func scheduleEndsForBackground() {
+        guard #available(iOS 16.2, *) else { return }
+        for activity in Activity<ClassCountdownAttributes>.activities
+        where activity.activityState == .active || activity.activityState == .stale {
+            guard !scheduledEndActivityIDs.contains(activity.id) else { continue }
+            guard let session = sessions.first(where: { $0.id == activity.attributes.classId }), !session.isCompleted else {
+                Task { await activity.end(nil, dismissalPolicy: .immediate) }
+                continue
+            }
+            scheduledEndActivityIDs.insert(activity.id)
+            let finalContent = ActivityContent(state: activity.content.state, staleDate: session.date)
+            let dismissal = session.date.addingTimeInterval(Self.lingerAfterStart)
+            Task {
+                await activity.end(finalContent, dismissalPolicy: .after(dismissal))
+            }
         }
     }
 

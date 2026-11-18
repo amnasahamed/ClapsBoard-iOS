@@ -19,6 +19,7 @@ import StoreKit
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var notificationManager: NotificationManager
+    @EnvironmentObject var sessionManager: ClassSessionManager
 
     // Read by NotificationManager when scheduling class reminders.
     @AppStorage(NotificationManager.remindersEnabledKey) private var enableNotifications = true
@@ -79,7 +80,13 @@ struct SettingsView: View {
                                         isOn: $enableNotifications
                                     )
                                     .onChange(of: enableNotifications) { _, enabled in
-                                        if !enabled { notificationManager.cancelAllClassReminders() }
+                                        if enabled {
+                                            // Turning reminders back on restores them for every
+                                            // class already planned, not only for new ones.
+                                            notificationManager.rescheduleAll(sessions: sessionManager.sessions, promptIfNeeded: true)
+                                        } else {
+                                            notificationManager.cancelAllClassReminders()
+                                        }
                                     }
 
                                     if enableNotifications {
@@ -93,6 +100,10 @@ struct SettingsView: View {
                                             options: [5, 10, 15, 30],
                                             label: { "\($0) min" }
                                         )
+                                        // The new lead time applies to classes already planned.
+                                        .onChange(of: notifyMinutesBefore) { _, _ in
+                                            notificationManager.rescheduleAll(sessions: sessionManager.sessions)
+                                        }
                                     }
 
                                     if !notificationManager.isAuthorized {
@@ -103,7 +114,9 @@ struct SettingsView: View {
                                                 icon: "exclamationmark.triangle.fill",
                                                 iconColor: Color(hex: "F59E0B"),
                                                 title: "Enable notifications",
-                                                subtitle: "Open iOS Settings",
+                                                subtitle: notificationManager.authorizationStatus == .notDetermined
+                                                    ? "Allow ClapsBoard to send class reminders"
+                                                    : "Turned off — open iOS Settings",
                                                 showsChevron: true
                                             )
                                         }
@@ -250,6 +263,11 @@ struct SettingsView: View {
         .sheet(isPresented: $showDataInfo) {
             DataInfoView()
         }
+        // The row above must reflect the real permission. (ClapsboardApp also
+        // refreshes it whenever the app becomes active, e.g. back from iOS Settings.)
+        .onAppear {
+            notificationManager.refreshAuthorizationStatus()
+        }
     }
 
     private func closeSettings() {
@@ -259,11 +277,23 @@ struct SettingsView: View {
     }
 
     private func openNotificationSettings() {
+        // Never asked yet: iOS Settings has no notification switch for the app
+        // until the permission prompt has been shown once, so ask here.
+        if notificationManager.authorizationStatus == .notDetermined {
+            notificationManager.requestAuthorization { granted in
+                if granted { notificationManager.rescheduleAll(sessions: sessionManager.sessions) }
+            }
+            return
+        }
         if let url = URL(string: UIApplication.openSettingsURLString) {
             UIApplication.shared.open(url)
         }
     }
 
+    // No App Store ID exists anywhere in this project, so the write-review
+    // page (apps.apple.com/app/id<ID>?action=write-review) cannot be opened
+    // yet. Until the ID is known this uses the system prompt, which iOS may
+    // decline to show (it is rate-limited).
     private func requestReview() {
         if let scene = UIApplication.shared.connectedScenes.first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene {
             SKStoreReviewController.requestReview(in: scene)
@@ -282,7 +312,7 @@ struct SettingsHeader: View {
                     .font(.system(.title2, design: .rounded, weight: .semibold))
                     .foregroundStyle(.primary)
 
-                Text("Board, camera, reminders, privacy")
+                Text("Board, reminders, voice, privacy")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -556,8 +586,8 @@ struct PrivacyPolicyView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             DataRowView(icon: "pencil", title: "Whiteboard Data", description: "Stored locally on your device only")
                             DataRowView(icon: "calendar", title: "Class Schedules", description: "Stored locally on your device only")
-                            DataRowView(icon: "doc", title: "Documents", description: "Stored in app's private document folder")
-                            DataRowView(icon: "camera", title: "Camera", description: "Used only for live mirror feature, never recorded or stored")
+                            DataRowView(icon: "doc", title: "Documents", description: "Stored on your device in the ClapsBoard folder, which is also visible in the Files app")
+                            DataRowView(icon: "camera", title: "Camera", description: "Used for the live mirror, which is never recorded or stored, and for photos you choose to take in Docs, which are saved on your device")
                             DataRowView(icon: "mic", title: "Voice Channel", description: "Live audio is sent peer-to-peer to connected nearby participants only during an active channel")
                             DataRowView(icon: "photo", title: "Photos", description: "Accessed only when you import images")
                             DataRowView(icon: "person.2", title: "Student Records", description: "Student names, notes, homework and lesson history you enter are stored locally on your device only")
@@ -597,7 +627,7 @@ struct PrivacyPolicyView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("• Access your data (it's all on your device)")
                             Text("• Delete your data (delete the app)")
-                            Text("• Export your data (use the export feature)")
+                            Text("• Export your work (board image or lesson PDF from the Board; documents with Share or the Files app)")
                             Text("• Control permissions (via iOS Settings)")
                         }
 
@@ -781,8 +811,8 @@ struct DataInfoView: View {
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("• Whiteboard drawings: Clear from the Board menu")
-                        Text("• Documents: Swipe to delete in Docs tab")
-                        Text("• Class schedules: Swipe to delete in Plan tab")
+                        Text("• Documents: Touch and hold a document in Docs, then Delete")
+                        Text("• Class schedules: Tap the pencil on a class in Plan, then Delete Class")
                         Text("• All data: Delete the app from your device")
                     }
                     .font(.subheadline)
@@ -836,6 +866,7 @@ struct DataStorageCard: View {
 // MARK: - Support View (Checklist item 17, 35)
 struct SupportView: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var showEmailFallback = false
     
     var body: some View {
         NavigationStack {
@@ -883,9 +914,12 @@ struct SupportView: View {
                             Text("amnasahmd@gmail.com")
                                 .font(.caption)
                                 .foregroundStyle(AppTheme.accent)
-                            Text("https://clapsboard.com")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                            if let site = URL(string: "https://clapsboard.com") {
+                                Link("clapsboard.com", destination: site)
+                                    .font(.caption)
+                                    .foregroundStyle(AppTheme.accent)
+                            }
                         }
                     }
 
@@ -899,12 +933,23 @@ struct SupportView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .alert("Email Address Copied", isPresented: $showEmailFallback) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("No mail app could be opened. \(Self.supportEmail) has been copied so you can paste it into any mail app.")
+            }
         }
     }
+
+    private static let supportEmail = "amnasahmd@gmail.com"
     
     private func sendEmail() {
-        if let url = URL(string: "mailto:amnasahmd@gmail.com?subject=ClapsBoard%20Support%20Request") {
-            UIApplication.shared.open(url)
+        guard let url = URL(string: "mailto:\(Self.supportEmail)?subject=ClapsBoard%20Support%20Request") else { return }
+        // With no mail app set up, opening mailto: silently fails.
+        UIApplication.shared.open(url) { opened in
+            guard !opened else { return }
+            UIPasteboard.general.string = Self.supportEmail
+            showEmailFallback = true
         }
     }
 }
@@ -914,4 +959,5 @@ struct SupportView: View {
     SettingsView()
         .environmentObject(AppState())
         .environmentObject(NotificationManager())
+        .environmentObject(ClassSessionManager())
 }

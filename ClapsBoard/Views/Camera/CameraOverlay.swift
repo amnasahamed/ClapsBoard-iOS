@@ -99,7 +99,37 @@ struct CameraOverlay: View {
                     .accessibilityLabel("Camera preview. Drag to move.")
                     .accessibilityAddTraits(.allowsDirectInteraction)
                 }
+                
+                // Camera / PiP notice (e.g. PiP could not start)
+                if let message = cameraManager.statusMessage {
+                    Text(message)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.black.opacity(0.78), in: Capsule())
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                        .accessibilityAddTraits(.isStaticText)
+                }
             }
+            // Rotation changes the container size, and resizing or reshaping
+            // changes the widget; either can leave the stored position
+            // off-screen, so pull it back inside each time.
+            .onChange(of: geometry.size, initial: true) { _, newSize in
+                cameraManager.clampPosition(in: newSize)
+            }
+            .onChange(of: cameraManager.widgetScale) { _, _ in
+                cameraManager.clampPosition(in: geometry.size)
+            }
+            .onChange(of: cameraManager.isCircular) { _, _ in
+                cameraManager.clampPosition(in: geometry.size)
+            }
+            .animation(.easeInOut(duration: 0.2), value: cameraManager.statusMessage)
         }
     }
 }
@@ -126,7 +156,9 @@ struct CameraControlsOverlay: View {
                     HStack {
                         Spacer()
                         
-                        // PiP Button (System Picture-in-Picture)
+                        // PiP Button (System Picture-in-Picture) — hidden on
+                        // devices where PiP isn't supported at all.
+                        if cameraManager.isPiPPossible {
                         Button(action: { cameraManager.togglePiP() }) {
                             Image(systemName: cameraManager.isPiPActive ? "pip.fill" : "pip")
                                 .font(.system(size: 14, weight: .bold))
@@ -136,6 +168,7 @@ struct CameraControlsOverlay: View {
                         }
                         .accessibilityLabel(cameraManager.isPiPActive ? "Stop Picture in Picture" : "Start Picture in Picture")
                         .accessibilityHint("Enables floating camera that works outside the app")
+                        }
 
                         // Close Button
                         Button(action: { cameraManager.stopCamera() }) {

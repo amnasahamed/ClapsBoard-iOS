@@ -15,7 +15,10 @@ struct ClassFormSheet: View {
     @Environment(\.dismiss) private var dismiss
     
     @State private var title: String = ""
-    @State private var date: Date = Date()
+    // Not "now": a class created with the untouched default would already be
+    // in the past a second later and never show as upcoming.
+    @State private var date: Date = ClassFormSheet.nextHalfHour()
+    @State private var durationMinutes: Int = ClassSession.defaultDurationMinutes
     @State private var link: String = ""
     @State private var selectedColor: String = "#3b82f6"
     @State private var notes: String = ""
@@ -23,6 +26,33 @@ struct ClassFormSheet: View {
     @State private var showDeleteConfirm = false
     
     private var isEditing: Bool { session != nil }
+
+    private var trimmedTitle: String { title.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var trimmedLink: String { link.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var linkLooksInvalid: Bool { !trimmedLink.isEmpty && ClassSession.normalizedLink(trimmedLink) == nil }
+
+    private var durationOptions: [Int] {
+        // Keep an unusual stored value selectable instead of silently changing it.
+        Array(Set([30, 45, 60, 90, 120, durationMinutes])).sorted()
+    }
+
+    private var endTimeText: String {
+        date.addingTimeInterval(Double(durationMinutes) * 60).formatted(date: .omitted, time: .shortened)
+    }
+
+    /// The next :00 or :30 after now.
+    static func nextHalfHour(after now: Date = Date()) -> Date {
+        let calendar = Calendar.current
+        let start = calendar.dateInterval(of: .hour, for: now)?.start ?? now
+        let minute = calendar.component(.minute, from: now)
+        return start.addingTimeInterval(minute < 30 ? 30 * 60 : 60 * 60)
+    }
+
+    private static func durationLabel(_ minutes: Int) -> String {
+        if minutes < 60 { return "\(minutes) min" }
+        let hours = minutes / 60, rest = minutes % 60
+        return rest == 0 ? "\(hours) hr" : "\(hours) hr \(rest) min"
+    }
     
     var body: some View {
         NavigationView {
@@ -35,9 +65,24 @@ struct ClassFormSheet: View {
                     DatePicker("Date & Time", selection: $date)
                         .datePickerStyle(.compact)
                     
+                    Picker("Duration", selection: $durationMinutes) {
+                        ForEach(durationOptions, id: \.self) { minutes in
+                            Text(Self.durationLabel(minutes)).tag(minutes)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
                     TextField("Meeting Link (optional)", text: $link)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                } footer: {
+                    if linkLooksInvalid {
+                        Text("This link doesn't look valid, so Join won't be able to open it.")
+                            .foregroundStyle(.red)
+                    } else {
+                        Text("Ends at \(endTimeText)")
+                    }
                 }
                 
                 // Color Selection
@@ -73,6 +118,12 @@ struct ClassFormSheet: View {
                         }
                     }
                     .pickerStyle(.menu)
+
+                    if recurring != .none {
+                        Text("Repeats from the date above. Each day can be marked complete on its own; deleting removes every repeat.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 
                 // Notes
@@ -99,7 +150,9 @@ struct ClassFormSheet: View {
                             dismiss()
                         }
                     } message: {
-                        Text("This action cannot be undone.")
+                        Text(session.recurring == .none
+                             ? "This action cannot be undone."
+                             : "This deletes every repeat of this class and cannot be undone.")
                     }
                 }
             }
@@ -114,7 +167,7 @@ struct ClassFormSheet: View {
                     Button("Save") {
                         saveSession()
                     }
-                    .disabled(title.isEmpty)
+                    .disabled(trimmedTitle.isEmpty) // whitespace-only is not a title
                     .fontWeight(.semibold)
                 }
             }
@@ -132,20 +185,24 @@ struct ClassFormSheet: View {
             selectedColor = session.color
             notes = session.notes
             recurring = session.recurring
+            durationMinutes = session.durationMinutes
         }
     }
     
     private func saveSession() {
         let newSession = ClassSession(
             id: session?.id ?? UUID(),
-            title: title,
+            title: trimmedTitle,
             date: date,
-            link: link,
+            // Store the openable form ("zoom.us/j/1" → "https://zoom.us/j/1").
+            link: ClassSession.normalizedLink(trimmedLink)?.absoluteString ?? trimmedLink,
             color: selectedColor,
             notes: notes,
             isCompleted: session?.isCompleted ?? false,
             recurring: recurring,
-            snoozedUntil: session?.snoozedUntil
+            snoozedUntil: session?.snoozedUntil,
+            durationMinutes: durationMinutes,
+            completedOccurrences: session?.completedOccurrences ?? []
         )
         onSave(newSession)
         dismiss()

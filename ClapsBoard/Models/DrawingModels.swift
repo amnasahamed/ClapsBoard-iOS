@@ -44,6 +44,12 @@ enum GridStyle: String, CaseIterable, Codable {
     }
 
     var isVisible: Bool { self != .none }
+
+    /// A value written by a newer app version must not make the whole
+    /// workspace file unreadable; fall back to no grid.
+    init(from decoder: Decoder) throws {
+        self = GridStyle(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .none
+    }
 }
 
 // MARK: - Tool Types
@@ -123,6 +129,11 @@ enum ToolType: String, CaseIterable, Codable {
 
 enum TextAlignment: String, CaseIterable, Codable {
     case left, center, right
+
+    /// Unknown values (newer app version) fall back instead of failing the load.
+    init(from decoder: Decoder) throws {
+        self = TextAlignment(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .left
+    }
     
     var swiftUIAlignment: SwiftUI.TextAlignment {
         switch self {
@@ -135,6 +146,11 @@ enum TextAlignment: String, CaseIterable, Codable {
 
 enum AnswerLayer: String, CaseIterable, Codable, Hashable {
     case base, hint, solution
+
+    /// Unknown values (newer app version) fall back instead of failing the load.
+    init(from decoder: Decoder) throws {
+        self = AnswerLayer(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .base
+    }
 
     var title: String {
         switch self {
@@ -221,6 +237,85 @@ struct DrawingElement: Identifiable, Codable, Equatable {
         self.isDeleted = isDeleted
         self.textAlign = textAlign
         self.layer = layer
+    }
+}
+
+// MARK: - Element Geometry
+/// One definition of "where is this element", shared by the canvas (hit
+/// testing, eraser, selection) and the exporter so they cannot drift apart.
+extension DrawingElement {
+    var textFontSize: CGFloat { max(strokeWidth * 8, 1) }
+    var stickerFontSize: CGFloat { max(strokeWidth * 10, 1) }
+
+    var textLines: [String] { (text ?? "").components(separatedBy: "\n") }
+
+    /// Text is stored with zero width/height, so its real rectangle has to be
+    /// measured. `x` is the alignment anchor (left edge, centre or right edge,
+    /// like the Android/web canvas) and `y` is the top.
+    var measuredTextBounds: CGRect {
+        let font = UIFont.systemFont(ofSize: textFontSize, weight: .medium)
+        let lines = textLines
+        let lineWidth = lines.map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        let size = CGSize(width: max(ceil(lineWidth), 1), height: ceil(font.lineHeight * CGFloat(max(lines.count, 1))))
+        let originX: CGFloat
+        switch textAlign {
+        case .left: originX = x
+        case .center: originX = x - size.width / 2
+        case .right: originX = x - size.width
+        }
+        return CGRect(origin: CGPoint(x: originX, y: y), size: size)
+    }
+
+    /// Stickers are drawn centred on x/y.
+    var measuredStickerBounds: CGRect {
+        let font = UIFont.systemFont(ofSize: stickerFontSize)
+        let size = ((text ?? "") as NSString).size(withAttributes: [.font: font])
+        let width = max(ceil(size.width), 1), height = max(ceil(size.height), 1)
+        return CGRect(x: x - width / 2, y: y - height / 2, width: width, height: height)
+    }
+
+    /// The rectangle the element covers when drawn, including stroke thickness.
+    var contentBounds: CGRect {
+        switch type {
+        case .pen, .marker, .line:
+            guard let first = points.first else { return CGRect(x: x, y: y, width: width, height: height) }
+            var minX = first.x, minY = first.y, maxX = first.x, maxY = first.y
+            for point in points.dropFirst() {
+                minX = min(minX, point.x); minY = min(minY, point.y)
+                maxX = max(maxX, point.x); maxY = max(maxY, point.y)
+            }
+            return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+                .insetBy(dx: -strokeWidth / 2, dy: -strokeWidth / 2)
+        case .text:
+            return measuredTextBounds
+        case .sticker:
+            return measuredStickerBounds
+        case .rectangle, .circle:
+            return CGRect(x: x, y: y, width: width, height: height).standardized
+                .insetBy(dx: -strokeWidth / 2, dy: -strokeWidth / 2)
+        default:
+            return CGRect(x: x, y: y, width: width, height: height).standardized
+        }
+    }
+
+    /// Distance from `point` to the drawn outline of a rectangle or ellipse
+    /// (0 on the line, growing both inside and outside the shape).
+    func distanceToShapeOutline(from point: CGPoint) -> CGFloat {
+        let rect = CGRect(x: x, y: y, width: width, height: height).standardized
+        if type == .circle, rect.width > 1, rect.height > 1 {
+            // Radial approximation: compare with the point where the ray from
+            // the centre crosses the ellipse. Exact for circles, close enough
+            // for ovals at finger precision.
+            let dx = point.x - rect.midX, dy = point.y - rect.midY
+            let a = rect.width / 2, b = rect.height / 2
+            let normalised = sqrt((dx * dx) / (a * a) + (dy * dy) / (b * b))
+            guard normalised > 0.0001 else { return min(a, b) }
+            return abs(hypot(dx, dy) * (1 - 1 / normalised))
+        }
+        let outsideX = max(rect.minX - point.x, 0, point.x - rect.maxX)
+        let outsideY = max(rect.minY - point.y, 0, point.y - rect.maxY)
+        if outsideX > 0 || outsideY > 0 { return hypot(outsideX, outsideY) }
+        return min(point.x - rect.minX, rect.maxX - point.x, point.y - rect.minY, rect.maxY - point.y)
     }
 }
 
@@ -371,6 +466,8 @@ final class LessonStore: ObservableObject {
     private let fileManager = FileManager.default
     private let workspaceURL: URL
     private let recoveryURL: URL
+    /// False when an unreadable recovery file could not be copied aside.
+    private var canWriteRecovery = true
     /// Encoding and writing run here, debounced, instead of on the main thread
     /// for every stroke, eraser hit and drag frame. Serial, so writes land in order.
     private let saveQueue = DispatchQueue(label: "com.clapsboard.lessonStore.save", qos: .utility)
@@ -394,8 +491,21 @@ final class LessonStore: ObservableObject {
         workspaceURL = directory.appendingPathComponent("lesson-workspace-v1.json")
         recoveryURL = directory.appendingPathComponent("lesson-workspace-v1-recovery.json")
 
-        if let data = Self.loadData(from: workspaceURL) ?? Self.loadData(from: recoveryURL),
-           data.version == 1, !data.students.isEmpty, !data.lessons.isEmpty {
+        // A file that exists but cannot be used (corrupt, or written by a
+        // newer version) is moved aside with a timestamp before anything is
+        // saved again, so the next save can never destroy the only copy.
+        var loaded = Self.loadData(from: workspaceURL)
+        if loaded == nil {
+            Self.setAsideUnreadableFile(at: workspaceURL, fileManager: fileManager)
+            loaded = Self.loadData(from: recoveryURL)
+            if loaded == nil, !Self.setAsideUnreadableFile(at: recoveryURL, fileManager: fileManager) {
+                // Couldn't keep a copy: leave the recovery file alone this
+                // session rather than replace it with a blank workspace.
+                canWriteRecovery = false
+            }
+        }
+
+        if let data = loaded {
             students = data.students
             lessons = data.lessons
             activeLessonId = data.lessons.contains(where: { $0.id == data.activeLessonId }) ? data.activeLessonId : data.lessons[0].id
@@ -423,25 +533,52 @@ final class LessonStore: ObservableObject {
         backgroundObservers.forEach(NotificationCenter.default.removeObserver)
     }
 
+    /// Returns the workspace only if it is fully usable.
     private static func loadData(from url: URL) -> LessonWorkspaceData? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(LessonWorkspaceData.self, from: data)
+        guard let data = try? Data(contentsOf: url),
+              let workspace = try? JSONDecoder().decode(LessonWorkspaceData.self, from: data),
+              workspace.version == 1, !workspace.students.isEmpty, !workspace.lessons.isEmpty,
+              workspace.lessons.allSatisfy({ !$0.pages.isEmpty }) else { return nil }
+        return workspace
+    }
+
+    /// Moves an existing, unusable file to "<name>-unreadable-<timestamp>.json"
+    /// next to it. Returns true when there is nothing left at `url` to lose.
+    @discardableResult
+    private static func setAsideUnreadableFile(at url: URL, fileManager: FileManager) -> Bool {
+        guard fileManager.fileExists(atPath: url.path) else { return true }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let name = url.deletingPathExtension().lastPathComponent + "-unreadable-" + formatter.string(from: Date()) + ".json"
+        let destination = url.deletingLastPathComponent().appendingPathComponent(name)
+        do {
+            try fileManager.moveItem(at: url, to: destination)
+            print("⚠️ Unreadable workspace file kept as \(name)")
+            return true
+        } catch {
+            if (try? fileManager.copyItem(at: url, to: destination)) != nil { return true }
+            print("❌ Could not set aside unreadable workspace file: \(error.localizedDescription)")
+            return false
+        }
     }
 
     private var snapshot: LessonWorkspaceData {
         LessonWorkspaceData(version: 1, students: students, lessons: lessons, activeLessonId: activeLessonId)
     }
 
-    private nonisolated static func write(_ snapshot: LessonWorkspaceData, to workspaceURL: URL, recoveryURL: URL) {
+    private nonisolated static func write(_ snapshot: LessonWorkspaceData, to workspaceURL: URL, recoveryURL: URL?) {
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        try? data.write(to: recoveryURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        if let recoveryURL {
+            try? data.write(to: recoveryURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
         try? data.write(to: workspaceURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
     private func save() {
         pendingSave?.cancel()
         // Capture the snapshot now (copy-on-write, cheap); encode it later.
-        let snapshot = snapshot, workspaceURL = workspaceURL, recoveryURL = recoveryURL
+        let snapshot = snapshot, workspaceURL = workspaceURL, recoveryURL = canWriteRecovery ? recoveryURL : nil
         let item = DispatchWorkItem { Self.write(snapshot, to: workspaceURL, recoveryURL: recoveryURL) }
         pendingSave = item
         saveQueue.asyncAfter(deadline: .now() + Self.saveDelay, execute: item)
@@ -452,7 +589,7 @@ final class LessonStore: ObservableObject {
         guard let pending = pendingSave else { return }
         pendingSave = nil
         pending.cancel()
-        let snapshot = snapshot, workspaceURL = workspaceURL, recoveryURL = recoveryURL
+        let snapshot = snapshot, workspaceURL = workspaceURL, recoveryURL = canWriteRecovery ? recoveryURL : nil
         saveQueue.sync { Self.write(snapshot, to: workspaceURL, recoveryURL: recoveryURL) }
     }
 
@@ -503,6 +640,19 @@ final class LessonStore: ObservableObject {
         lessons[lessonIndex].pages.removeAll { $0.id == pageId }
         lessons[lessonIndex].activePageId = lessons[lessonIndex].pages[min(oldIndex, lessons[lessonIndex].pages.count - 1)].id
         lessons[lessonIndex].updatedAt = Date(); save()
+    }
+
+    /// Every media file id still used by any page of any lesson.
+    var referencedMediaIds: Set<String> {
+        var ids = Set<String>()
+        for lesson in lessons {
+            for page in lesson.pages {
+                for element in page.elements {
+                    if let id = element.mediaId { ids.insert(id) }
+                }
+            }
+        }
+        return ids
     }
 
     func updateActivePage(elements: [DrawingElement], gridStyle: GridStyle) {

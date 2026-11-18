@@ -20,11 +20,19 @@ class CanvasViewModel: ObservableObject {
             if tool != oldValue {
                 impactFeedback.impactOccurred()
             }
+            // The selection outline and its handles belong to the Select tool;
+            // left behind, they sit on top of the canvas while drawing.
+            if tool != .select, selectedElement != nil {
+                selectedElement = nil
+            }
         }
     }
     @Published var color: Color = DrawingConstants.defaultColor
     // Settings → Board → Default stroke.
     @Published var strokeWidth: CGFloat = (UserDefaults.standard.object(forKey: "defaultStrokeWidth") as? Double).map { CGFloat($0) } ?? DrawingConstants.defaultStrokeWidth
+    /// Text size, separate from the pen width so changing one leaves the
+    /// other alone. Same scale the text slider always used: font = value × 8.
+    @Published var textSize: CGFloat = 3
     @Published var eraserSize: CGFloat = DrawingConstants.eraserSize
     @Published var textAlign: TextAlignment = .left
     @Published var currentSticker: String = DrawingConstants.stickers[0]
@@ -74,11 +82,35 @@ class CanvasViewModel: ObservableObject {
     // MARK: - Persistence
     private let saveKey = "canvasElements"
     
+    /// The Settings default last applied to `strokeWidth`.
+    private var appliedDefaultStrokeWidth = UserDefaults.standard.object(forKey: "defaultStrokeWidth") as? Double
+    private var defaultsObserver: NSObjectProtocol?
+
     init() {
         loadElements()
         // Prepare haptic engines
         impactFeedback.prepare()
         selectionFeedback.prepare()
+        // Settings is a sheet over the board, so pick up a new "Default
+        // stroke" as it changes instead of only at launch.
+        defaultsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            DispatchQueue.main.async { self?.refreshDefaultStrokeWidth() }
+        }
+    }
+
+    deinit {
+        if let defaultsObserver { NotificationCenter.default.removeObserver(defaultsObserver) }
+    }
+
+    /// Applies the Settings default stroke only when that setting itself has
+    /// changed, so a width picked in the board's own panel is not overwritten.
+    func refreshDefaultStrokeWidth() {
+        let stored = UserDefaults.standard.object(forKey: "defaultStrokeWidth") as? Double
+        guard stored != appliedDefaultStrokeWidth else { return }
+        appliedDefaultStrokeWidth = stored
+        if let stored { strokeWidth = CGFloat(stored) }
     }
     
     // MARK: - Element Management
@@ -116,6 +148,10 @@ class CanvasViewModel: ObservableObject {
     }
 
     func commitChange(description: String) {
+        // canUndo/canRedo read the unpublished history. A change that only
+        // edits an element in place (move, resize) would otherwise leave the
+        // Undo button showing its old state.
+        objectWillChange.send()
         // Remove any redo history
         if historyIndex < history.count - 1 {
             history = Array(history.prefix(historyIndex + 1))
@@ -217,91 +253,49 @@ class CanvasViewModel: ObservableObject {
         }
         
         // 2. Load from file system
-        let loadedElements = StorageService.shared.loadElements()
+        let loadedElements = StorageService.shared.loadElements().filter { !$0.isDeleted }
         self.elements = loadedElements
         self.history = [loadedElements]
     }
 
     /// Loads a saved lesson page and starts a fresh undo history for that page.
-    func loadLessonPage(_ page: LessonPage) {
-        elements = page.elements
+    /// Zoom and pan are kept unless `resetView` is set, so flipping between
+    /// the pages of a lesson does not throw the view back to the centre.
+    func loadLessonPage(_ page: LessonPage, resetView: Bool = false) {
+        // Erased elements are only kept (flagged) so the eraser can be undone.
+        // The undo history starts again here, so they can be dropped for good.
+        let liveElements = page.elements.filter { !$0.isDeleted }
+        elements = liveElements
         gridStyle = page.gridStyle
         selectedElement = nil
-        history = [page.elements]
+        history = [liveElements]
         historyDescriptions = ["Opened \(page.title)"]
         historyIndex = 0
-        zoom = 1
-        pan = .zero
+        if resetView {
+            zoom = 1
+            pan = .zero
+        }
         saveElements()
+    }
+
+    /// Media ids used by the open page, including states still reachable with undo/redo.
+    var referencedMediaIds: Set<String> {
+        var ids = Set(elements.compactMap(\.mediaId))
+        for state in history {
+            for element in state {
+                if let id = element.mediaId { ids.insert(id) }
+            }
+        }
+        return ids
     }
     
     // MARK: - Export
     
-    /// Calculates the bounding box of all elements on the canvas
+    /// Bounding box of everything currently shown on the canvas, or nil when
+    /// there is nothing to show. Erased elements and elements on a hidden
+    /// hint/solution layer are left out.
     func calculateContentBounds() -> CGRect? {
-        guard !elements.isEmpty else { return nil }
-        
-        let validElements = elements.filter { !$0.isDeleted }
-        guard !validElements.isEmpty else { return nil }
-        
-        var minX: CGFloat = .infinity
-        var minY: CGFloat = .infinity
-        var maxX: CGFloat = -.infinity
-        var maxY: CGFloat = -.infinity
-        
-        for element in validElements {
-            var elementMinX, elementMinY, elementMaxX, elementMaxY: CGFloat
-            
-            // Check points for path-based elements
-            if !element.points.isEmpty {
-                elementMinX = element.points.map { $0.x }.min() ?? element.x
-                elementMinY = element.points.map { $0.y }.min() ?? element.y
-                elementMaxX = element.points.map { $0.x }.max() ?? (element.x + element.width)
-                elementMaxY = element.points.map { $0.y }.max() ?? (element.y + element.height)
-                
-                // Add stroke width buffer for paths
-                elementMinX -= element.strokeWidth / 2
-                elementMinY -= element.strokeWidth / 2
-                elementMaxX += element.strokeWidth / 2
-                elementMaxY += element.strokeWidth / 2
-            } else {
-                // Check frame for object-based elements (rect, circle, text, image)
-                var frame = CGRect(x: element.x, y: element.y, width: element.width, height: element.height)
-                
-                // Add stroke width buffer for shapes
-                if element.type == .rectangle || element.type == .circle || element.type == .line {
-                    frame = frame.insetBy(dx: -element.strokeWidth / 2, dy: -element.strokeWidth / 2)
-                }
-                
-                // Account for rotation
-                if element.rotation != 0 {
-                   let center = CGPoint(x: frame.midX, y: frame.midY)
-                   let transform = CGAffineTransform(translationX: center.x, y: center.y)
-                       .rotated(by: element.rotation)
-                       .translatedBy(x: -center.x, y: -center.y)
-                   frame = frame.applying(transform)
-                }
-                
-                elementMinX = frame.minX
-                elementMinY = frame.minY
-                elementMaxX = frame.maxX
-                elementMaxY = frame.maxY
-            }
-            
-            minX = min(minX, elementMinX)
-            minY = min(minY, elementMinY)
-            maxX = max(maxX, elementMaxX)
-            maxY = max(maxY, elementMaxY)
-        }
-        
-        // Add padding
-        let padding: CGFloat = 50
-        return CGRect(
-            x: minX - padding,
-            y: minY - padding,
-            width: maxX - minX + (padding * 2),
-            height: maxY - minY + (padding * 2)
-        )
+        boundsForExport(elements: elements.filter { !$0.isDeleted && isVisible($0) })
     }
     
     // MARK: - Export
@@ -315,8 +309,13 @@ class CanvasViewModel: ObservableObject {
         let exportBounds: CGRect
         if let rect = customRect {
             exportBounds = rect
+        } else if let contentBounds = calculateContentBounds() {
+            exportBounds = contentBounds
         } else {
-            exportBounds = calculateContentBounds() ?? CGRect(x: 1500, y: 1500, width: 1000, height: 1000)
+            // Empty board: nil lets the caller say so instead of sharing a
+            // blank white square.
+            completion(nil)
+            return
         }
         
         guard exportBounds.width > 0, exportBounds.height > 0 else {
@@ -356,8 +355,10 @@ class CanvasViewModel: ObservableObject {
         let exportBounds: CGRect
         if let rect = customRect {
             exportBounds = rect
+        } else if let contentBounds = calculateContentBounds() {
+            exportBounds = contentBounds
         } else {
-            exportBounds = calculateContentBounds() ?? CGRect(x: 1500, y: 1500, width: 1000, height: 1000)
+            return nil
         }
         
         guard exportBounds.width > 0, exportBounds.height > 0 else { return nil }
@@ -381,9 +382,10 @@ class CanvasViewModel: ObservableObject {
     }
 
     /// Renders a saved page without changing the currently displayed page.
+    /// Returns nil for a page with nothing visible on it.
     func exportImage(elements pageElements: [DrawingElement], gridStyle pageGridStyle: GridStyle) -> UIImage? {
         let liveElements = pageElements.filter { !$0.isDeleted && visibleLayers.contains($0.layer ?? .base) }
-        let bounds = boundsForExport(elements: liveElements) ?? CGRect(x: 0, y: 0, width: 1280, height: 720)
+        guard let bounds = boundsForExport(elements: liveElements) else { return nil }
         var images: [UUID: UIImage] = [:]
         for element in liveElements where element.type == .image {
             if let data = element.imageData, let image = UIImage(data: data) { images[element.id] = image }
@@ -392,21 +394,23 @@ class CanvasViewModel: ObservableObject {
     }
 
     private func boundsForExport(elements: [DrawingElement]) -> CGRect? {
-        guard !elements.isEmpty else { return nil }
         var result = CGRect.null
         for element in elements {
-            var rect: CGRect
-            if !element.points.isEmpty {
-                let xs = element.points.map(\.x), ys = element.points.map(\.y)
-                rect = CGRect(x: xs.min() ?? 0, y: ys.min() ?? 0,
-                              width: max(1, (xs.max() ?? 0) - (xs.min() ?? 0)),
-                              height: max(1, (ys.max() ?? 0) - (ys.min() ?? 0)))
-            } else {
-                rect = CGRect(x: element.x, y: element.y, width: max(1, element.width), height: max(1, element.height))
+            // contentBounds measures text and centres stickers, the same way
+            // they are drawn, so neither is cropped.
+            var rect = element.contentBounds
+            if element.rotation != 0 {
+                let center = CGPoint(x: element.x + element.width / 2, y: element.y + element.height / 2)
+                rect = rect.applying(CGAffineTransform(translationX: center.x, y: center.y)
+                    .rotated(by: element.rotation)
+                    .translatedBy(x: -center.x, y: -center.y))
             }
-            result = result.union(rect.insetBy(dx: -max(20, element.strokeWidth), dy: -max(20, element.strokeWidth)))
+            guard !rect.isNull, !rect.isInfinite, rect.width.isFinite, rect.height.isFinite else { continue }
+            result = result.union(rect)
         }
-        return result.isNull ? nil : result.insetBy(dx: -40, dy: -40)
+        guard !result.isNull else { return nil }
+        // Padding, which also keeps a single dot from becoming a 0-pt image.
+        return result.insetBy(dx: -50, dy: -50)
     }
     
     /// Core rendering logic - thread-safe
@@ -629,22 +633,35 @@ class CanvasViewModel: ObservableObject {
             path.stroke()
             
         case .text:
-            if let text = element.text {
-                let font = UIFont.systemFont(ofSize: element.strokeWidth * 8, weight: .medium)
+            if element.text != nil {
+                let font = UIFont.systemFont(ofSize: element.textFontSize, weight: .medium)
                 let attributes: [NSAttributedString.Key: Any] = [
                     .font: font,
                     .foregroundColor: color
                 ]
-                let nsString = text as NSString
-                nsString.draw(at: CGPoint(x: element.x, y: element.y), withAttributes: attributes)
+                // Line by line, each placed against the alignment anchor (x),
+                // exactly as DrawingCanvas draws it.
+                for (index, line) in element.textLines.enumerated() {
+                    let nsLine = line as NSString
+                    let lineWidth = nsLine.size(withAttributes: attributes).width
+                    let lineX: CGFloat
+                    switch element.textAlign {
+                    case .left: lineX = element.x
+                    case .center: lineX = element.x - lineWidth / 2
+                    case .right: lineX = element.x - lineWidth
+                    }
+                    nsLine.draw(at: CGPoint(x: lineX, y: element.y + CGFloat(index) * font.lineHeight), withAttributes: attributes)
+                }
             }
             
         case .sticker:
             if let sticker = element.text {
-                let font = UIFont.systemFont(ofSize: element.strokeWidth * 10)
+                let font = UIFont.systemFont(ofSize: element.stickerFontSize)
                 let attributes: [NSAttributedString.Key: Any] = [.font: font]
                 let nsString = sticker as NSString
-                nsString.draw(at: CGPoint(x: element.x, y: element.y), withAttributes: attributes)
+                // The canvas draws stickers centred on x/y; do the same here.
+                let size = nsString.size(withAttributes: attributes)
+                nsString.draw(at: CGPoint(x: element.x - size.width / 2, y: element.y - size.height / 2), withAttributes: attributes)
             }
             
         case .image:
@@ -757,6 +774,26 @@ class StorageService {
             print("❌ Failed to load media \(id): \(error.localizedDescription)")
             return nil
         }
+    }
+    
+    /// Deletes media files that nothing refers to any more. Conservative: it
+    /// only looks inside this app's own media folder and only removes files
+    /// named the way `saveMedia` names them (a bare UUID). Runs synchronously
+    /// so a file saved a moment later can never be caught by a stale list.
+    @discardableResult
+    func purgeMedia(keeping referencedIds: Set<String>) -> Int {
+        guard let names = try? fileManager.contentsOfDirectory(atPath: mediaDirectory.path) else { return 0 }
+        var removed = 0
+        for name in names where !referencedIds.contains(name) && UUID(uuidString: name) != nil {
+            let url = mediaDirectory.appendingPathComponent(name)
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else { continue }
+            if (try? fileManager.removeItem(at: url)) != nil {
+                imageCache[name] = nil
+                removed += 1
+            }
+        }
+        return removed
     }
     
     func saveElements(_ elements: [DrawingElement]) {

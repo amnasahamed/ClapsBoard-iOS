@@ -60,36 +60,21 @@
 		<string>_clapsboard-vc._udp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>
-        ClapsBoard uses the camera to display a movable, mirror-like view of the tutor during teaching sessions.
-    </string>
+	<string>ClapsBoard uses the camera to show a movable, mirror-like view of the tutor during teaching sessions, and to take photos that you choose to add to Docs.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>
-        ClapsBoard uses local network access for the Voice Channel feature, allowing tutors to communicate with nearby students during lessons.
-    </string>
+	<string>ClapsBoard uses local network access for the Voice Channel feature, allowing tutors to communicate with nearby students during lessons.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>
-        ClapsBoard uses the microphone only for the Voice Channel feature, so you can talk with nearby students during a lesson.
-    </string>
+	<string>ClapsBoard uses the microphone only for the Voice Channel feature, so you can talk with nearby students during a lesson.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>
-        ClapsBoard allows you to save exported whiteboard images to your photo library.
-    </string>
+	<string>ClapsBoard allows you to save exported whiteboard images to your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>
-        ClapsBoard allows you to import images from your photo library for use as teaching materials on the whiteboard.
-    </string>
+	<string>ClapsBoard allows you to import images from your photo library for use as teaching materials on the whiteboard.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
-	<key>NSUserActivityTypes</key>
-	<array>
-		<string>com.clapsboard.app.board</string>
-		<string>com.clapsboard.app.class</string>
-	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
-		<true/>
+		<false/>
 		<key>UISceneConfigurations</key>
 		<dict/>
 	</dict>
@@ -119,7 +104,5 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>UISupportsDocumentBrowser</key>
-	<true/>
 </dict>
 </plist>

@@ -20,6 +20,8 @@ struct DrawingCanvas: View {
     @State private var eraserCursorPosition: CGPoint?
     @State private var selectionDragOriginal: DrawingElement?
     @State private var selectionDidMove = false
+    /// True once the current eraser drag has actually removed something.
+    @State private var eraseDidChange = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -39,7 +41,11 @@ struct DrawingCanvas: View {
                 .frame(width: geometry.size.width, height: geometry.size.height)
 
                 // Selection overlay for selected element
-                if let selected = viewModel.selectedElement, viewModel.isVisible(selected) {
+                // Only with the Select tool, and only while the element still
+                // exists (it may have been erased or undone away).
+                if viewModel.tool == .select,
+                   let selected = viewModel.selectedElement, viewModel.isVisible(selected),
+                   viewModel.elements.contains(where: { $0.id == selected.id && !$0.isDeleted }) {
                     SelectionOverlay(element: selected, viewModel: viewModel)
                 }
 
@@ -64,7 +70,7 @@ struct DrawingCanvas: View {
                         text: $textInput,
                         position: position,
                         color: viewModel.color,
-                        fontSize: viewModel.strokeWidth * 8,
+                        fontSize: viewModel.textSize * 8,
                         onCommit: { commitText(at: position) },
                         onCancel: { cancelTextInput() }
                     )
@@ -101,6 +107,10 @@ struct DrawingCanvas: View {
         }
 
         let location = value.location
+
+        // The Pan tool only moves the board (BoardView handles the drag). It
+        // must not collect points for a stroke or fade the toolbars.
+        if viewModel.tool == .pan { return }
 
         if viewModel.tool != .select {
             viewModel.isDrawing = true
@@ -179,7 +189,7 @@ struct DrawingCanvas: View {
 
         case .eraser:
             eraserCursorPosition = nil
-            viewModel.commitChange()
+            commitEraseIfNeeded()
 
         case .text:
             textInputPosition = location
@@ -259,9 +269,19 @@ struct DrawingCanvas: View {
         currentPath = []
     }
 
+    /// Adds one undo step for an eraser drag, and only if it removed something.
+    private func commitEraseIfNeeded() {
+        guard eraseDidChange else { return }
+        eraseDidChange = false
+        viewModel.commitChange(description: "Erased")
+    }
+
     private func cancelActiveCanvasInteraction() {
         currentPath = []
         eraserCursorPosition = nil
+        // A pinch that interrupts an erase keeps what was already erased, as
+        // one undoable step, instead of leaving it outside the undo history.
+        commitEraseIfNeeded()
 
         if let original = selectionDragOriginal, selectionDidMove {
             viewModel.updateElement(original)
@@ -338,21 +358,34 @@ struct DrawingCanvas: View {
             )
             
         case .text:
-            if let text = element.text {
-                context.draw(
-                    Text(text)
-                        .font(.system(size: element.strokeWidth * 8, weight: .medium))
-                        .foregroundColor(color),
-                    at: CGPoint(x: element.x, y: element.y),
-                    anchor: .topLeading
-                )
+            if element.text != nil {
+                // x is the alignment anchor: left edge, centre or right edge.
+                // Drawn line by line so multi-line text lines up the same way
+                // (and the same way as the export).
+                let fontSize = element.textFontSize
+                let lineHeight = UIFont.systemFont(ofSize: fontSize, weight: .medium).lineHeight
+                let anchor: UnitPoint
+                switch element.textAlign {
+                case .left: anchor = .topLeading
+                case .center: anchor = .top
+                case .right: anchor = .topTrailing
+                }
+                for (index, line) in element.textLines.enumerated() where !line.isEmpty {
+                    context.draw(
+                        Text(line)
+                            .font(.system(size: fontSize, weight: .medium))
+                            .foregroundColor(color),
+                        at: CGPoint(x: element.x, y: element.y + CGFloat(index) * lineHeight),
+                        anchor: anchor
+                    )
+                }
             }
             
         case .sticker:
             if let sticker = element.text {
                 context.draw(
                     Text(sticker)
-                        .font(.system(size: element.strokeWidth * 10)),
+                        .font(.system(size: element.stickerFontSize)),
                     at: CGPoint(x: element.x, y: element.y),
                     anchor: .center
                 )
@@ -481,9 +514,14 @@ struct DrawingCanvas: View {
                 return distance < threshold + (element.strokeWidth / 2)
             }
             return false
+
+        case .rectangle, .circle:
+            // Shapes are outlines: hit only near the line, so things drawn
+            // inside a later rectangle or circle can still be picked.
+            return element.distanceToShapeOutline(from: point) < threshold + (element.strokeWidth / 2)
             
         default:
-            // For text, stickers, images, and shapes, bounding box is sufficient
+            // For text, stickers and images, bounding box is sufficient
             return true
         }
     }
@@ -512,56 +550,66 @@ struct DrawingCanvas: View {
     
     private func eraseAt(_ point: CGPoint) {
         let eraserRadius = viewModel.eraserSize / 2
-        let eraserRect = CGRect(x: point.x - eraserRadius, y: point.y - eraserRadius,
-                                width: eraserRadius * 2, height: eraserRadius * 2)
         
         var elementsChanged = false
         var updatedElements = viewModel.elements
         
-        // HIG: Spatial optimization - only check elements that intersect the eraser's current region
         for i in 0..<updatedElements.count {
             if updatedElements[i].isDeleted || !viewModel.isVisible(updatedElements[i]) { continue }
             
             let element = updatedElements[i]
-            // Expand bounding box by stroke width to ensure we can hit the edges of thick lines
             let strokeBuffer = element.strokeWidth / 2
-            let rect = CGRect(x: element.x - strokeBuffer, y: element.y - strokeBuffer,
-                            width: element.width + element.strokeWidth, height: element.height + element.strokeWidth)
             
-            // Fast filter: Bounding box check
-            guard rect.intersects(eraserRect) else { continue }
-            
-            // Precise check
             let shouldDelete: Bool
             switch element.type {
             case .pen, .marker, .line:
+                // Fast filter on the stored bounding box before walking the points
+                let reach = eraserRadius + strokeBuffer
+                let rect = CGRect(x: element.x, y: element.y, width: element.width, height: element.height)
+                    .standardized.insetBy(dx: -reach, dy: -reach)
+                guard rect.contains(point) else { continue }
+
                 // Check if eraser is near any segment of the path
                 var foundMatch = false
                 if element.points.count > 1 {
                     for j in 0..<element.points.count - 1 {
                         let distance = distanceToLineSegment(point: point, start: element.points[j], end: element.points[j+1])
-                        // Use segment distance check for precise erasing
-                        if distance < eraserRadius + strokeBuffer {
+                        if distance < reach {
                             foundMatch = true
                             break
                         }
                     }
                 } else if let firstPoint = element.points.first {
                     // Single point fallback
-                    let distance = hypot(firstPoint.x - point.x, firstPoint.y - point.y)
-                    foundMatch = distance < eraserRadius + strokeBuffer
+                    foundMatch = hypot(firstPoint.x - point.x, firstPoint.y - point.y) < reach
                 }
                 shouldDelete = foundMatch
-                
+
+            case .rectangle, .circle:
+                // Only when the eraser touches the drawn outline, not anywhere
+                // inside the shape's bounding box.
+                shouldDelete = element.distanceToShapeOutline(from: point) < eraserRadius + strokeBuffer
+
+            case .text, .sticker:
+                // Real drawn bounds (text is measured, stickers are centred on
+                // x/y), touched by the eraser circle.
+                let bounds = element.contentBounds
+                let nearestX = min(max(point.x, bounds.minX), bounds.maxX)
+                let nearestY = min(max(point.y, bounds.minY), bounds.maxY)
+                shouldDelete = hypot(point.x - nearestX, point.y - nearestY) < eraserRadius
+
             default:
-                // For text, stickers, images, and shapes, bounding box intersection is generally enough
-                // but we add a small 5pt buffer for a more "forgiving" feel
-                shouldDelete = rect.insetBy(dx: -5, dy: -5).intersects(eraserRect)
+                // Images (diagrams, photos) are never erased by rubbing; they
+                // are removed with Select and the trash button.
+                shouldDelete = false
             }
             
             if shouldDelete {
                 updatedElements[i].isDeleted = true
                 elementsChanged = true
+                if viewModel.selectedElement?.id == element.id {
+                    viewModel.selectedElement = nil
+                }
                 // HIG: Provide subtle haptic feedback when an element is successfully erased
                 viewModel.triggerHaptic(.impact)
             }
@@ -569,6 +617,7 @@ struct DrawingCanvas: View {
         
         if elementsChanged {
             viewModel.elements = updatedElements
+            eraseDidChange = true
         }
     }
     
@@ -584,7 +633,7 @@ struct DrawingCanvas: View {
             y: position.y,
             text: textInput,
             color: viewModel.color,
-            strokeWidth: viewModel.strokeWidth,
+            strokeWidth: viewModel.textSize,
             textAlign: viewModel.textAlign
         )
         viewModel.addElement(element)
@@ -622,13 +671,12 @@ fileprivate extension DrawingElement {
             .insetBy(dx: -strokePadding, dy: -strokePadding)
 
         case .sticker:
-            let side = max(width, height, strokeWidth * 10, 44)
+            let drawn = measuredStickerBounds
+            let side = max(drawn.width, drawn.height, 44)
             return CGRect(x: x - side / 2, y: y - side / 2, width: side, height: side)
 
         case .text:
-            let fontSize = max(strokeWidth * 8, 18)
-            let textWidth = max(CGFloat(text?.count ?? 1) * fontSize * 0.56, minimumSize)
-            return CGRect(x: x, y: y, width: max(width, textWidth), height: max(height, fontSize * 1.35))
+            return measuredTextBounds
 
         default:
             return CGRect(x: x, y: y, width: max(width, minimumSize), height: max(height, minimumSize))
@@ -650,24 +698,36 @@ fileprivate extension DrawingElement {
                     y: newBounds.minY + yProgress * newBounds.height
                 )
             }
-            modified.x = newBounds.minX
-            modified.y = newBounds.minY
-            modified.width = newBounds.width
-            modified.height = newBounds.height
+            // Keep the stored box (used by the eraser's quick filter) in
+            // step with the points rather than with the padded outline.
+            let xs = modified.points.map(\.x), ys = modified.points.map(\.y)
+            modified.x = xs.min() ?? newBounds.minX
+            modified.y = ys.min() ?? newBounds.minY
+            modified.width = (xs.max() ?? modified.x) - modified.x
+            modified.height = (ys.max() ?? modified.y) - modified.y
 
         case .sticker:
+            // Scale from the current size (strokeWidth sets the emoji size)
+            // instead of deriving a size from the outline, which made the
+            // sticker jump 50% bigger on the first touch.
+            let scale = newBounds.width / oldWidth
             modified.x = newBounds.midX
             modified.y = newBounds.midY
-            modified.width = newBounds.width
-            modified.height = newBounds.height
-            modified.strokeWidth = max(2, min(newBounds.width, newBounds.height) / 10)
+            modified.width = width * scale
+            modified.height = height * scale
+            modified.strokeWidth = max(1.5, strokeWidth * scale)
 
         case .text:
-            modified.x = newBounds.minX
+            // Same idea: scale the current font size. x stays the alignment
+            // anchor, so it follows the matching edge of the new outline.
+            let scale = newBounds.height / oldHeight
+            modified.strokeWidth = max(1, strokeWidth * scale)
             modified.y = newBounds.minY
-            modified.width = newBounds.width
-            modified.height = newBounds.height
-            modified.strokeWidth = max(1.5, newBounds.height / 8)
+            switch textAlign {
+            case .left: modified.x = newBounds.minX
+            case .center: modified.x = newBounds.midX
+            case .right: modified.x = newBounds.maxX
+            }
 
         default:
             modified.x = newBounds.minX
@@ -686,6 +746,7 @@ struct SelectionOverlay: View {
     @ObservedObject var viewModel: CanvasViewModel
     
     @State private var resizeOriginal: DrawingElement?
+    @State private var resizeDidMove = false
     
     var body: some View {
         GeometryReader { _ in
@@ -749,14 +810,23 @@ struct SelectionOverlay: View {
                     resizeOriginal = element
                 }
                 viewModel.isManipulatingSelection = true
+                // Resting a finger on a handle is not a resize: change nothing
+                // (and add no undo step) until it has really moved.
+                if !resizeDidMove {
+                    guard hypot(value.translation.width, value.translation.height) > 3 else { return }
+                    resizeDidMove = true
+                }
                 guard let original = resizeOriginal else { return }
                 let resized = resizedElement(original, from: position, by: value.translation)
                 viewModel.updateElement(resized)
                 viewModel.selectedElement = resized
             }
             .onEnded { _ in
-                viewModel.commitChange(description: "Element resized")
+                if resizeDidMove {
+                    viewModel.commitChange(description: "Element resized")
+                }
                 resizeOriginal = nil
+                resizeDidMove = false
                 viewModel.isManipulatingSelection = false
             }
     }
@@ -806,6 +876,27 @@ struct SelectionOverlay: View {
             newBounds.size.height += translation.height
             newBounds.size.width = max(minSize, newBounds.width)
             newBounds.size.height = max(minSize, newBounds.height)
+        }
+
+        // Images must not be squashed, and text and stickers only have one
+        // size, so these scale uniformly from the opposite corner.
+        if element.type == .image || element.type == .text || element.type == .sticker,
+           originalBounds.width > 0, originalBounds.height > 0 {
+            let smallestScale = min(1, minSize / min(originalBounds.width, originalBounds.height))
+            let scale = max(newBounds.width / originalBounds.width,
+                            newBounds.height / originalBounds.height,
+                            smallestScale)
+            let size = CGSize(width: originalBounds.width * scale, height: originalBounds.height * scale)
+            switch handle {
+            case .topLeft:
+                newBounds = CGRect(origin: CGPoint(x: originalBounds.maxX - size.width, y: originalBounds.maxY - size.height), size: size)
+            case .topRight:
+                newBounds = CGRect(origin: CGPoint(x: originalBounds.minX, y: originalBounds.maxY - size.height), size: size)
+            case .bottomLeft:
+                newBounds = CGRect(origin: CGPoint(x: originalBounds.maxX - size.width, y: originalBounds.minY), size: size)
+            case .bottomRight:
+                newBounds = CGRect(origin: originalBounds.origin, size: size)
+            }
         }
 
         return element.resized(from: originalBounds, to: newBounds)
@@ -879,6 +970,13 @@ struct TextInputOverlay: View {
         self._localPosition = State(initialValue: position)
     }
     
+    /// The ink colour, unless it is too pale to read on the white field.
+    private var fieldTextColor: Color {
+        let ink = CodableColor(color)
+        let luminance = 0.299 * ink.red + 0.587 * ink.green + 0.114 * ink.blue
+        return luminance > 0.8 ? Color(hex: "1e293b") : color
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             // Semi-transparent overlay to indicate text mode is active
@@ -899,12 +997,15 @@ struct TextInputOverlay: View {
                 // Text input field
                 TextField("Type here...", text: $text, axis: .vertical)
                     .font(.system(size: max(20, fontSize), weight: .medium))
-                    .foregroundColor(color)
+                    .foregroundColor(fieldTextColor)
+                    .tint(AppTheme.accent)
                     .textFieldStyle(.plain)
                     .focused($isFocused)
                     .padding(12)
                     .frame(minWidth: 200, maxWidth: 400)
-                    .background(Color(.systemBackground))
+                    // The board is always light, so the field is too: in Dark
+                    // Mode systemBackground put dark ink on a black field.
+                    .background(Color.white)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
                     .overlay(
@@ -948,6 +1049,8 @@ struct TextInputOverlay: View {
             .padding(8)
             .background(.ultraThinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 16))
+            // Light placeholder, caption and material regardless of appearance.
+            .environment(\.colorScheme, .light)
             .shadow(color: .black.opacity(0.2), radius: 12, y: 6)
             // Just above the tap, kept off the canvas's top-left edge. There is
             // deliberately no upper limit: the old one assumed a 4000-pt canvas

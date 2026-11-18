@@ -9,7 +9,8 @@ import SwiftUI
 
 /// Calendar and class scheduling view (HIG: Navigation, Accessibility)
 struct CalendarView: View {
-    @StateObject private var sessionManager = ClassSessionManager()
+    // Shared with Settings and the reminder scheduler (owned by ClapsboardApp).
+    @EnvironmentObject var sessionManager: ClassSessionManager
     @StateObject private var liveActivityCoordinator = ClassCountdownLiveActivityCoordinator()
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var notificationManager: NotificationManager
@@ -36,6 +37,17 @@ struct CalendarView: View {
                     AppModeMenu(selectedTab: $appState.selectedTab)
 
                     Spacer()
+
+                    if viewMode != .list && !isShowingToday {
+                        Button("Today", action: goToToday)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(AppTheme.accent)
+                            .padding(.horizontal, 12)
+                            .frame(height: 36)
+                            .background(AppTheme.accentSoft, in: Capsule())
+                            .frame(minHeight: 44)
+                            .accessibilityHint("Jumps back to today")
+                    }
 
                     Button(action: { showAddSheet = true }) {
                         ZStack {
@@ -69,40 +81,50 @@ struct CalendarView: View {
             .background(Color(.systemBackground))
             
             // Content
-            ScrollView {
-                VStack(spacing: 16) {
-                    switch viewMode {
-                    case .list:
-                        ListView(sessions: sessionManager.upcomingSessions, sessionManager: sessionManager, editSession: { session in
-                            editingSession = session
-                        })
-                        
-                    case .week:
-                        WeekView(
-                            selectedDate: $selectedDate,
-                            sessions: sessionManager.sessions,
-                            getSessionsForDate: { sessionManager.sessions(for: $0) },
-                            sessionManager: sessionManager,
-                            editSession: { session in
+            // Re-rendered every 30 s so countdowns, "in progress" and "today"
+            // stay correct while the Plan tab is left open.
+            TimelineView(.periodic(from: .now, by: 30)) { timeline in
+                let now = timeline.date
+                ScrollView {
+                    VStack(spacing: 16) {
+                        switch viewMode {
+                        case .list:
+                            ListView(now: now, sessionManager: sessionManager, editSession: { session in
                                 editingSession = session
-                            }
-                        )
-                        
-                    case .month:
-                        MonthView(
-                            currentMonth: $currentMonth,
-                            selectedDate: $selectedDate,
-                            sessions: sessionManager.sessions,
-                            getSessionsForDate: { sessionManager.sessions(for: $0) },
-                            sessionManager: sessionManager,
-                            editSession: { session in
-                                editingSession = session
-                            }
-                        )
+                            })
+
+                        case .week:
+                            WeekView(
+                                selectedDate: $selectedDate,
+                                now: now,
+                                sessionManager: sessionManager,
+                                editSession: { session in
+                                    editingSession = session
+                                }
+                            )
+
+                        case .month:
+                            MonthView(
+                                currentMonth: $currentMonth,
+                                selectedDate: $selectedDate,
+                                now: now,
+                                sessionManager: sessionManager,
+                                editSession: { session in
+                                    editingSession = session
+                                }
+                            )
+                        }
                     }
+                    .padding(.top, 16)
+                    .padding(.bottom, 28)
                 }
-                .padding(.top, 16)
-                .padding(.bottom, 28)
+                // Midnight passed: a selection that was sitting on "today"
+                // follows the new day instead of silently becoming yesterday.
+                .onChange(of: Calendar.current.startOfDay(for: now)) { oldDay, newDay in
+                    if Calendar.current.isDate(selectedDate, inSameDayAs: oldDay) { selectedDate = newDay }
+                    if Calendar.current.isDate(currentMonth, equalTo: oldDay, toGranularity: .month) { currentMonth = newDay }
+                    syncLiveActivity()
+                }
             }
         }
         .sheet(isPresented: $showAddSheet) {
@@ -110,8 +132,9 @@ struct CalendarView: View {
                 session: nil,
                 onSave: { session in
                     sessionManager.addSession(session)
-                    notificationManager.scheduleClassNotification(for: session)
-                    liveActivityCoordinator.updateSessions(sessionManager.sessions)
+                    // Saving a class is the moment to ask for notification permission.
+                    notificationManager.rescheduleAll(sessions: sessionManager.sessions, promptIfNeeded: true)
+                    syncLiveActivity()
                 },
                 onDelete: nil
             )
@@ -121,47 +144,96 @@ struct CalendarView: View {
                 session: session,
                 onSave: { updated in
                     sessionManager.updateSession(updated)
-                    notificationManager.scheduleClassNotification(for: updated)
-                    liveActivityCoordinator.updateSessions(sessionManager.sessions)
+                    // Removes the old reminder first, so moving a class never
+                    // leaves a reminder at the old time.
+                    notificationManager.rescheduleAll(sessions: sessionManager.sessions, promptIfNeeded: true)
+                    syncLiveActivity()
                 },
                 onDelete: { id in
                     sessionManager.deleteSession(id: id)
                     notificationManager.cancelNotification(for: id)
                     liveActivityCoordinator.endActivity(for: id)
-                    liveActivityCoordinator.updateSessions(sessionManager.sessions)
+                    syncLiveActivity()
                 }
             )
         }
         .onAppear {
-            liveActivityCoordinator.startMonitoring(sessions: sessionManager.sessions)
+            liveActivityCoordinator.startMonitoring(sessions: sessionManager.sessionsForCountdown())
         }
-        .onReceive(sessionManager.$sessions) { sessions in
-            liveActivityCoordinator.updateSessions(sessions)
+        .onReceive(sessionManager.$sessions) { _ in
+            // $sessions fires before the new value is stored; read it afterwards.
+            DispatchQueue.main.async { syncLiveActivity() }
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
-            liveActivityCoordinator.updateSessions(sessionManager.sessions)
+            syncLiveActivity()
         }
+    }
+
+    /// Repeating classes are handed to the countdown as their next occurrence.
+    private func syncLiveActivity() {
+        liveActivityCoordinator.updateSessions(sessionManager.sessionsForCountdown())
+    }
+
+    private var isShowingToday: Bool {
+        let calendar = Calendar.current
+        let today = Date()
+        guard calendar.isDate(selectedDate, inSameDayAs: today) else { return false }
+        return viewMode != .month || calendar.isDate(currentMonth, equalTo: today, toGranularity: .month)
+    }
+
+    private func goToToday() {
+        selectedDate = Date()
+        currentMonth = Date()
     }
 }
 
 // MARK: - List View
 struct ListView: View {
-    let sessions: [ClassSession]
-    let sessionManager: ClassSessionManager
+    let now: Date
+    @ObservedObject var sessionManager: ClassSessionManager
     let editSession: (ClassSession) -> Void
     
     var body: some View {
-        if sessions.isEmpty {
+        let started = sessionManager.startedTodayOccurrences(now: now)
+        let upcoming = sessionManager.upcomingOccurrences(now: now)
+
+        if started.isEmpty && upcoming.isEmpty {
             EmptyStateView()
         } else {
-            LazyVStack(spacing: 12) {
-                ForEach(sessions) { session in
-                    ClassCard(session: session, onEdit: editSession, sessionManager: sessionManager)
+            LazyVStack(alignment: .leading, spacing: 12) {
+                // Classes that have started stay here until the day ends, so
+                // Join is still one tap away during the lesson.
+                if !started.isEmpty {
+                    PlanSectionHeader(title: "Earlier today / In progress")
+                    ForEach(started) { occurrence in
+                        ClassCard(occurrence: occurrence, now: now, onEdit: editSession, sessionManager: sessionManager)
+                    }
+                }
+
+                if !upcoming.isEmpty {
+                    if !started.isEmpty { PlanSectionHeader(title: "Upcoming") }
+                    ForEach(upcoming) { occurrence in
+                        ClassCard(occurrence: occurrence, now: now, onEdit: editSession, sessionManager: sessionManager)
+                    }
                 }
             }
             .padding(.horizontal, 20)
         }
+    }
+}
+
+struct PlanSectionHeader: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .textCase(.uppercase)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 4)
+            .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -197,12 +269,29 @@ struct EmptyStateView: View {
 
 // MARK: - Class Card
 struct ClassCard: View {
-    let session: ClassSession
+    let occurrence: ClassOccurrence
+    let now: Date
     let onEdit: (ClassSession) -> Void
     let sessionManager: ClassSessionManager
 
     @State private var showActions = false
     @State private var isPressed = false
+    @State private var showLinkError = false
+
+    private var session: ClassSession { occurrence.session }
+    private var isCompleted: Bool { occurrence.isCompleted }
+
+    private var timeText: String {
+        let end = occurrence.endDate.formatted(date: .omitted, time: .shortened)
+        return "\(occurrence.date.formatted(date: .abbreviated, time: .shortened)) – \(end)"
+    }
+
+    /// Countdown before the start, "In progress" until the end time.
+    private var statusText: String? {
+        guard !isCompleted else { return nil }
+        if let countdown = ClassSession.countdownText(from: now, to: occurrence.date) { return countdown }
+        return now < occurrence.endDate ? "In progress" : nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -216,20 +305,25 @@ struct ClassCard: View {
                     // Title
                     Text(session.title)
                         .font(.headline)
-                        .strikethrough(session.isCompleted, color: .secondary)
-                        .foregroundStyle(session.isCompleted ? .secondary : .primary)
+                        .strikethrough(isCompleted, color: .secondary)
+                        .foregroundStyle(isCompleted ? .secondary : .primary)
 
                     // Time
                     HStack(spacing: 4) {
                         Image(systemName: "clock")
                             .font(.caption)
-                        Text(session.date.formatted(date: .abbreviated, time: .shortened))
+                        Text(timeText)
                             .font(.caption)
+                        if session.recurring != .none {
+                            Image(systemName: "repeat")
+                                .font(.caption2)
+                                .accessibilityLabel("Repeats \(session.recurring.rawValue.lowercased())")
+                        }
                     }
                     .foregroundStyle(.secondary)
 
                     // Countdown
-                    if let countdown = session.timeUntil {
+                    if let countdown = statusText {
                         Text(countdown)
                             .font(.caption.weight(.medium))
                             .foregroundStyle(AppTheme.accent)
@@ -249,15 +343,19 @@ struct ClassCard: View {
                                 .frame(width: 44, height: 44)
                                 .background(session.swiftUIColor, in: Circle())
                         }
+                        .accessibilityLabel("Join \(session.title)")
                     }
 
                     // Complete Toggle
-                    Button(action: { sessionManager.toggleComplete(id: session.id) }) {
-                        Image(systemName: session.isCompleted ? "checkmark.circle.fill" : "circle")
+                    // Reminders follow automatically: ClapsboardApp reschedules
+                    // whenever the sessions change (cancel on complete, restore on undo).
+                    Button(action: { sessionManager.toggleComplete(id: session.id, occurrenceDate: occurrence.date) }) {
+                        Image(systemName: isCompleted ? "checkmark.circle.fill" : "circle")
                             .font(.system(size: 24))
-                            .foregroundStyle(session.isCompleted ? .green : .secondary)
+                            .foregroundStyle(isCompleted ? .green : .secondary)
                     }
                     .frame(width: 44, height: 44)
+                    .accessibilityLabel(isCompleted ? "Mark not completed" : "Mark completed")
 
                     // Edit Button
                     Button(action: { onEdit(session) }) {
@@ -267,6 +365,7 @@ struct ClassCard: View {
                             .frame(width: 44, height: 44)
                             .background(Color.gray.opacity(0.1), in: Circle())
                     }
+                    .accessibilityLabel("Edit \(session.title)")
                 }
             }
 
@@ -284,7 +383,7 @@ struct ClassCard: View {
                 .fill(.ultraThinMaterial)
                 .shadow(color: .black.opacity(isPressed ? 0.12 : 0.05), radius: isPressed ? 14 : 10, y: isPressed ? 8 : 5)
         )
-        .opacity(session.isCompleted ? 0.7 : 1)
+        .opacity(isCompleted ? 0.7 : 1)
         .scaleEffect(isPressed ? 0.98 : 1.0)
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isPressed)
         .simultaneousGesture(
@@ -296,11 +395,22 @@ struct ClassCard: View {
                     isPressed = false
                 }
         )
+        .alert("Can't Open Link", isPresented: $showLinkError) {
+            Button("Edit Class") { onEdit(session) }
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("\"\(session.link)\" could not be opened. Check the meeting link for this class.")
+        }
     }
 
     private func openLink() {
-        if let url = URL(string: session.link) {
-            UIApplication.shared.open(url)
+        // Links typed without "https://" used to do nothing at all.
+        guard let url = ClassSession.normalizedLink(session.link) else {
+            showLinkError = true
+            return
+        }
+        UIApplication.shared.open(url) { opened in
+            if !opened { showLinkError = true }
         }
     }
 }
@@ -308,9 +418,8 @@ struct ClassCard: View {
 // MARK: - Week View
 struct WeekView: View {
     @Binding var selectedDate: Date
-    let sessions: [ClassSession]
-    let getSessionsForDate: (Date) -> [ClassSession]
-    let sessionManager: ClassSessionManager
+    let now: Date
+    @ObservedObject var sessionManager: ClassSessionManager
     let editSession: (ClassSession) -> Void
     
     private var weekDays: [Date] {
@@ -350,7 +459,7 @@ struct WeekView: View {
                     DayCell(
                         date: day,
                         isSelected: Calendar.current.isDate(day, inSameDayAs: selectedDate),
-                        hasEvents: !getSessionsForDate(day).isEmpty,
+                        hasEvents: !sessionManager.occurrences(on: day).isEmpty,
                         onTap: { selectedDate = day }
                     )
                 }
@@ -358,18 +467,7 @@ struct WeekView: View {
             .padding(.horizontal, 8)
             
             // Sessions for selected day
-            let daysSessions = getSessionsForDate(selectedDate)
-            if daysSessions.isEmpty {
-                Text("No classes on this day")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 20)
-            } else {
-                ForEach(daysSessions) { session in
-                    ClassCard(session: session, onEdit: editSession, sessionManager: sessionManager)
-                        .padding(.horizontal, 20)
-                }
-            }
+            SelectedDayList(date: selectedDate, now: now, sessionManager: sessionManager, editSession: editSession)
         }
     }
     
@@ -383,6 +481,39 @@ struct WeekView: View {
         if let newDate = Calendar.current.date(byAdding: .weekOfYear, value: direction, to: selectedDate) {
             selectedDate = newDate
         }
+    }
+}
+
+// MARK: - Selected Day List
+/// The classes of the selected day (Week and Month views), with a heading that
+/// says which day is listed, sorted by start time.
+struct SelectedDayList: View {
+    let date: Date
+    let now: Date
+    let sessionManager: ClassSessionManager
+    let editSession: (ClassSession) -> Void
+
+    var body: some View {
+        let dayOccurrences = sessionManager.occurrences(on: date)
+
+        VStack(alignment: .leading, spacing: 12) {
+            PlanSectionHeader(title: Calendar.current.isDate(date, inSameDayAs: now)
+                              ? "Today, \(date.formatted(.dateTime.day().month(.wide)))"
+                              : date.formatted(.dateTime.weekday(.wide).day().month(.wide).year()))
+
+            if dayOccurrences.isEmpty {
+                Text("No classes on this day")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 8)
+            } else {
+                ForEach(dayOccurrences) { occurrence in
+                    ClassCard(occurrence: occurrence, now: now, onEdit: editSession, sessionManager: sessionManager)
+                }
+            }
+        }
+        .padding(.horizontal, 20)
     }
 }
 
@@ -439,9 +570,8 @@ struct DayCell: View {
 struct MonthView: View {
     @Binding var currentMonth: Date
     @Binding var selectedDate: Date
-    let sessions: [ClassSession]
-    let getSessionsForDate: (Date) -> [ClassSession]
-    let sessionManager: ClassSessionManager
+    let now: Date
+    @ObservedObject var sessionManager: ClassSessionManager
     let editSession: (ClassSession) -> Void
     
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 0), count: 7)
@@ -489,7 +619,7 @@ struct MonthView: View {
                         MonthDayCell(
                             date: date,
                             isSelected: Calendar.current.isDate(date, inSameDayAs: selectedDate),
-                            hasEvents: !getSessionsForDate(date).isEmpty,
+                            hasEvents: !sessionManager.occurrences(on: date).isEmpty,
                             isCurrentMonth: Calendar.current.isDate(date, equalTo: currentMonth, toGranularity: .month),
                             onTap: { selectedDate = date }
                         )
@@ -501,26 +631,7 @@ struct MonthView: View {
             }
             .padding(.horizontal, 8)
 
-            selectedDaySessions
-        }
-    }
-
-    @ViewBuilder
-    private var selectedDaySessions: some View {
-        let daySessions = getSessionsForDate(selectedDate).sorted { $0.date < $1.date }
-
-        if daySessions.isEmpty {
-            Text("No classes on this day")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .padding(.top, 8)
-        } else {
-            LazyVStack(spacing: 12) {
-                ForEach(daySessions) { session in
-                    ClassCard(session: session, onEdit: editSession, sessionManager: sessionManager)
-                }
-            }
-            .padding(.horizontal, 20)
+            SelectedDayList(date: selectedDate, now: now, sessionManager: sessionManager, editSession: editSession)
         }
     }
     
@@ -548,8 +659,22 @@ struct MonthView: View {
     }
     
     private func moveMonth(_ direction: Int) {
-        if let newMonth = Calendar.current.date(byAdding: .month, value: direction, to: currentMonth) {
+        let calendar = Calendar.current
+        if let newMonth = calendar.date(byAdding: .month, value: direction, to: currentMonth) {
             currentMonth = newMonth
+            // Keep the selection (and so the list below) inside the month on
+            // screen: today when it is this month, otherwise the same day
+            // number (clamped to the month's length by Calendar).
+            if calendar.isDate(Date(), equalTo: newMonth, toGranularity: .month) {
+                selectedDate = Date()
+            } else if !calendar.isDate(selectedDate, equalTo: newMonth, toGranularity: .month) {
+                let monthsApart = calendar.dateComponents(
+                    [.month],
+                    from: calendar.dateInterval(of: .month, for: selectedDate)?.start ?? selectedDate,
+                    to: calendar.dateInterval(of: .month, for: newMonth)?.start ?? newMonth
+                ).month ?? direction
+                selectedDate = calendar.date(byAdding: .month, value: monthsApart, to: selectedDate) ?? newMonth
+            }
         }
     }
 }
@@ -596,4 +721,5 @@ struct MonthDayCell: View {
     CalendarView()
         .environmentObject(AppState())
         .environmentObject(NotificationManager())
+        .environmentObject(ClassSessionManager())
 }

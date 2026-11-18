@@ -96,7 +96,8 @@ struct MathInputError: Error { let message: String }
 // MARK: - Helpers
 
 private func number(_ raw: String, _ name: String) throws -> Double {
-    let text = raw.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "−", with: "-")
+    // "," is the decimal separator on many keyboards (2,5 means 2.5).
+    let text = raw.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "−", with: "-").replacingOccurrences(of: ",", with: ".")
     guard !text.isEmpty, let value = Double(text), value.isFinite else { throw MathInputError(message: "\(name) needs to be a number.") }
     return value
 }
@@ -274,8 +275,14 @@ enum MathDiagramBuilder {
         let from = try number(spec.from, "From"), to = try number(spec.to, "To"), step = try number(spec.step, "Step")
         guard to > from else { throw MathInputError(message: "\"To\" must be bigger than \"From\".") }
         guard step > 0 else { throw MathInputError(message: "Step must be more than 0.") }
-        let count = Int(((to - from) / step).rounded())
-        guard count <= 40 else { throw MathInputError(message: "That makes more than 40 ticks. Use a bigger step.") }
+        // Check the size before converting: Int() traps on huge or infinite
+        // values (a tiny step, or a range that overflows).
+        let steps = (to - from) / step
+        guard steps.isFinite else { throw MathInputError(message: "That range is too big. Use smaller numbers.") }
+        guard steps <= 40 + 1e-9 else { throw MathInputError(message: "That makes more than 40 ticks. Use a bigger step.") }
+        // Round down so the last tick never lands past "To"; the tiny nudge
+        // absorbs float error (0.3 / 0.1 is 2.9999…).
+        let count = Int((steps + 1e-9).rounded(.down))
         let marks = try spec.marks.split(whereSeparator: { ",; ".contains($0) }).map { try number(String($0), "Each marked point") }
 
         let width: CGFloat = 760, height: CGFloat = 170, left: CGFloat = 50, right = width - 50, y: CGFloat = 80

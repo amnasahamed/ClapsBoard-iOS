@@ -174,4 +174,5 @@ struct AppModeMenu: View {
     ContentView()
         .environmentObject(AppState())
         .environmentObject(NotificationManager())
+        .environmentObject(ClassSessionManager())
 }

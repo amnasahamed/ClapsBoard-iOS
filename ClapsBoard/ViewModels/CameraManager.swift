@@ -86,6 +86,13 @@ class CameraManager: NSObject, ObservableObject {
     @Published var previewLayer: AVCaptureVideoPreviewLayer?
     @Published var authorizationStatus: CameraAuthorizationStatus = .notDetermined
     @Published var showPermissionAlert: Bool = false
+    /// Short user-facing notice (camera or PiP could not start). Shown by
+    /// CameraOverlay and cleared automatically after a few seconds.
+    @Published var statusMessage: String?
+    private var statusMessageClearWork: DispatchWorkItem?
+    /// True while stored widget preferences are being read, so the property
+    /// observers don't write the defaults back over values not yet loaded.
+    private var isLoadingPreferences = false
     
     // MARK: - Private Properties
     private var captureSession: AVCaptureSession?
@@ -119,6 +126,9 @@ class CameraManager: NSObject, ObservableObject {
     private var isStoppingSession: Bool = false
     /// Set when stopCamera() arrives while setup is still in flight.
     private var isStopPendingAfterSetup: Bool = false
+    /// Set when startCamera() arrives while a stop is still in flight, so a
+    /// quick off-then-on isn't dropped.
+    private var isStartPendingAfterStop: Bool = false
     /// All startRunning/stopRunning calls go through one serial queue so a stop
     /// can never overtake the start it is meant to cancel.
     private let sessionQueue = DispatchQueue(label: "com.clapsboard.captureSession", qos: .userInitiated)
@@ -136,6 +146,21 @@ class CameraManager: NSObject, ObservableObject {
     /// window animates closed, and that must not read as "the tutor left the app".
     private var lastPiPStopDate: Date?
     private let pipStopSettleInterval: TimeInterval = 1.5
+    /// Bumped whenever PiP is stopped or cancelled; delayed start retries
+    /// carry the value they were scheduled with and give up if it has moved on.
+    private var pipStartGeneration = 0
+    /// PiP was requested by the scene deactivating (not by the PiP button).
+    /// If the scene comes back without the app having gone to the background
+    /// (Control Center, Notification Center, a system alert) it is undone.
+    private var isPiPRequestedByDeactivation = false
+    private var didEnterBackgroundSinceDeactivation = false
+    /// A cancelled start was already handed to iOS; stop PiP as soon as it reports started.
+    private var shouldStopPiPOnceStarted = false
+    
+    // iOS 17 rotation coordinator: gives the right angle for whichever camera
+    // is in use (the hand-written table below was derived for the back camera).
+    private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
+    private var rotationObservation: NSKeyValueObservation?
     
     // Watchdog: detects silent session stalls and restarts the feed
     private var sessionHealthTimer: Timer?
@@ -145,6 +170,8 @@ class CameraManager: NSObject, ObservableObject {
     private var silentAudioEngine: AVAudioEngine?
     private var isBackgroundKeepAliveActive = false
     private var isBackgroundKeepAliveStarting = false
+    /// The keep-alive activated the audio session and it has not been released yet.
+    private var keepAliveSessionNeedsRelease = false
     
     
     var widgetSize: CGSize = CGSize(width: 140, height: 186)
@@ -165,12 +192,18 @@ class CameraManager: NSObject, ObservableObject {
         super.init()
         loadWidgetPreferences()
         updateAuthorizationStatus()
-        setupAudioSession() // Required for PiP
+        // The audio session is deliberately not touched at launch: the camera
+        // captures no audio. It is configured when the camera turns on (category
+        // only) and activated only while the PiP keep-alive runs.
         checkPiPSupport()
         setupNotificationObservers() // Monitor app lifecycle for PiP
     }
 
     private func loadWidgetPreferences() {
+        // Each assignment below runs a didSet that saves *every* preference;
+        // without this flag the first one overwrote the stored values with defaults.
+        isLoadingPreferences = true
+        defer { isLoadingPreferences = false }
         let defaults = UserDefaults.standard
         if defaults.object(forKey: "cameraWidgetX") != nil {
             position = CGPoint(x: defaults.double(forKey: "cameraWidgetX"), y: defaults.double(forKey: "cameraWidgetY"))
@@ -186,6 +219,7 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     private func saveWidgetPreferences() {
+        guard !isLoadingPreferences else { return }
         let defaults = UserDefaults.standard
         defaults.set(position.x, forKey: "cameraWidgetX")
         defaults.set(position.y, forKey: "cameraWidgetY")
@@ -210,37 +244,25 @@ class CameraManager: NSObject, ObservableObject {
     }
     
     // MARK: - Audio Session Setup
-    private func setupAudioSession() {
-        audioSessionQueue.async {
-            let session = AVAudioSession.sharedInstance()
-            do {
-                try session.setCategory(.playAndRecord, mode: .videoChat, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP])
-                try session.setActive(true)
-                print("✅ Audio session configured for video chat")
-            } catch {
-                print("⚠️ Failed to setup audio session: \(error.localizedDescription)")
-                self.audioSessionQueue.asyncAfter(deadline: .now() + 0.3) {
-                    do {
-                        let session = AVAudioSession.sharedInstance()
-                        try session.setCategory(.playAndRecord, mode: .videoChat, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP])
-                        try session.setActive(true)
-                        print("✅ Audio session configured on retry")
-                    } catch {
-                        print("❌ Audio session retry also failed: \(error.localizedDescription)")
-                    }
-                }
-            }
-        }
-    }
-
+    
     /// Playback-oriented session required for background PiP with the `audio` background mode.
-    private func setupPiPAudioSession(completion: ((Bool) -> Void)? = nil) {
+    /// `activate: false` only sets the category (no effect on other apps' audio);
+    /// the session is activated when the keep-alive starts.
+    private func setupPiPAudioSession(activate: Bool = true, completion: ((Bool) -> Void)? = nil) {
+        // A Voice Channel owns the shared session (.playAndRecord/.voiceChat).
+        // Changing the category here would cut its microphone, and that
+        // category already supports PiP and background audio, so leave it.
+        let voiceSessionActive = AudioStreamManager.isVoiceSessionActive
         audioSessionQueue.async {
+            if voiceSessionActive {
+                if let completion { DispatchQueue.main.async { completion(true) } }
+                return
+            }
             let session = AVAudioSession.sharedInstance()
             do {
                 try session.setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers])
-                try session.setActive(true)
-                print("✅ Audio session configured for background PiP")
+                if activate { try session.setActive(true) }
+                print("✅ Audio session configured for PiP (active: \(activate))")
                 if let completion { DispatchQueue.main.async { completion(true) } }
             } catch {
                 print("⚠️ Failed to setup PiP audio session: \(error.localizedDescription)")
@@ -275,6 +297,7 @@ class CameraManager: NSObject, ObservableObject {
             print("🔇 Background keep-alive started (silent audio + PiP session)")
         } catch {
             print("❌ Failed to start background keep-alive: \(error.localizedDescription)")
+            AudioStreamManager.isSessionHeldByCameraPiP = false
         }
         isBackgroundKeepAliveStarting = false
     }
@@ -283,24 +306,88 @@ class CameraManager: NSObject, ObservableObject {
     private func startBackgroundKeepAlive() {
         guard !isBackgroundKeepAliveActive, !isBackgroundKeepAliveStarting else { return }
         isBackgroundKeepAliveStarting = true
+        // Tells the Voice Channel not to deactivate the shared session under PiP.
+        AudioStreamManager.isSessionHeldByCameraPiP = true
+        keepAliveSessionNeedsRelease = true
         setupPiPAudioSession { [weak self] configured in
             guard let self else { return }
             guard configured else {
                 self.isBackgroundKeepAliveStarting = false
+                AudioStreamManager.isSessionHeldByCameraPiP = false
                 return
             }
             self.startSilentAudioEngine()
         }
     }
     
+    /// Stops the silent audio. Called whenever PiP is not (or no longer) showing:
+    /// PiP closed from the button or its own window, PiP failed to start, start
+    /// retries ran out, the camera was turned off, or the app came to the foreground.
     private func stopBackgroundKeepAlive() {
         isBackgroundKeepAliveStarting = false
-        guard isBackgroundKeepAliveActive else { return }
+        AudioStreamManager.isSessionHeldByCameraPiP = false
+        if isBackgroundKeepAliveActive {
+            silentAudioEngine?.stop()
+            silentAudioEngine = nil
+            isBackgroundKeepAliveActive = false
+            print("🔇 Background keep-alive stopped")
+        }
+        
+        // Release the session the keep-alive activated — unless a Voice Channel
+        // is using it, or PiP is still on screen in the foreground (it is then
+        // released when PiP closes). Runs on the same serial queue as
+        // activation, so it can't overtake a start still in flight.
+        guard keepAliveSessionNeedsRelease, !isPiPActive, !AudioStreamManager.isVoiceSessionActive else { return }
+        keepAliveSessionNeedsRelease = false
+        audioSessionQueue.async {
+            guard !AudioStreamManager.isVoiceSessionActive, !AudioStreamManager.isSessionHeldByCameraPiP else { return }
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
+    }
+    
+    /// The silent engine stops on its own when the audio route/configuration
+    /// changes or the session is interrupted (a phone call, a Voice Channel
+    /// taking the session). Without this the manager still believed the
+    /// keep-alive was running and never restarted it.
+    @objc private func handleSilentEngineConfigurationChange(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let engine = self.silentAudioEngine,
+                  (notification.object as? AVAudioEngine) === engine else { return }
+            self.markKeepAliveEngineStopped()
+            self.restartKeepAliveIfPiPShowing()
+        }
+    }
+    
+    @objc private func handleAudioSessionInterruption(_ notification: Notification) {
+        guard let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: rawType) else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            switch type {
+            case .began:
+                if self.isBackgroundKeepAliveActive { self.markKeepAliveEngineStopped() }
+            case .ended:
+                self.restartKeepAliveIfPiPShowing()
+            @unknown default:
+                break
+            }
+        }
+    }
+    
+    /// Drops a silent engine that the system already stopped, leaving the session alone.
+    private func markKeepAliveEngineStopped() {
         silentAudioEngine?.stop()
         silentAudioEngine = nil
         isBackgroundKeepAliveActive = false
-        setupAudioSession()
-        print("🔇 Background keep-alive stopped")
+        print("🔇 Background keep-alive engine stopped by the system")
+    }
+    
+    private func restartKeepAliveIfPiPShowing() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, self.isActive,
+                  self.isPiPActive || (self.pipController?.isPictureInPictureActive ?? false) else { return }
+            self.startBackgroundKeepAlive()
+        }
     }
     
     /// Starts silent audio + ensures capture keeps running while PiP is backgrounded.
@@ -373,6 +460,21 @@ class CameraManager: NSObject, ObservableObject {
             object: nil
         )
 
+        // Notice when the silent keep-alive engine is stopped by the system
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSilentEngineConfigurationChange),
+            name: .AVAudioEngineConfigurationChange,
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAudioSessionInterruption),
+            name: AVAudioSession.interruptionNotification,
+            object: nil
+        )
+
         // Keep the camera feed upright when the device rotates
         NotificationCenter.default.addObserver(
             self,
@@ -425,6 +527,9 @@ class CameraManager: NSObject, ObservableObject {
     @objc private func handleCaptureSessionInterruptionEnded(_ notification: Notification) {
         print("🎥 Camera session interruption ended - resuming...")
         ensureSessionRunning(reason: "interruption ended")
+        // The watchdog is stopped when an interruption begins without PiP;
+        // start it again or a later stall would go unnoticed.
+        if isActive { startSessionHealthMonitoring() }
     }
     
     @objc private func handleCaptureSessionRuntimeError(_ notification: Notification) {
@@ -441,9 +546,14 @@ class CameraManager: NSObject, ObservableObject {
         } else if let stoppedAt = lastPiPStopDate, Date().timeIntervalSince(stoppedAt) < pipStopSettleInterval {
             // Restarting here re-opened PiP every time the tutor closed it.
             print("📱 Scene resigned while PiP was closing - not restarting PiP")
-        } else if isActive {
+        } else if isActive, isPiPPossible {
             print("📱 App resigning active - enabling auto-PiP intent")
             shouldAutoPiP = true
+            // Remember that this start came from the scene deactivating, so it
+            // can be undone if the app never actually reaches the background.
+            isPiPRequestedByDeactivation = true
+            didEnterBackgroundSinceDeactivation = false
+            shouldStopPiPOnceStarted = false
             // PiP must be requested while the scene is still foreground-active.
             // Waiting until didEnterBackground is too late on many devices.
             startPiP()
@@ -452,12 +562,21 @@ class CameraManager: NSObject, ObservableObject {
     
     @objc private func handleSceneDidBecomeActive(_ notification: Notification) {
         print("📱 App became active")
+        if isPiPRequestedByDeactivation, !didEnterBackgroundSinceDeactivation {
+            // The scene only lost focus (Control Center, Notification Center,
+            // a permission alert) — the tutor never left the app, so the PiP
+            // that deactivation started must not stay on.
+            print("📱 Scene reactivated without backgrounding - cancelling auto-PiP")
+            cancelDeactivationPiP()
+        }
+        isPiPRequestedByDeactivation = false
         ensureSessionRunning(reason: "scene became active")
         recoverSampleBufferLayerIfNeeded()
     }
     
     @objc private func handleAppDidEnterBackground(_ notification: Notification) {
         wasActiveBeforeBackground = isActive
+        didEnterBackgroundSinceDeactivation = true
         print("📱 App entered background - camera active: \(isActive), PiP active: \(isPiPActive)")
         
         if isPiPActive || (isActive && shouldAutoPiP) {
@@ -481,10 +600,10 @@ class CameraManager: NSObject, ObservableObject {
         
         if !session.isRunning {
             print("🔄 Restarting camera session (\(reason))")
+            // Only the PiP keep-alive needs an audio session; the camera itself
+            // captures no audio, so nothing is configured otherwise.
             if isPiPActive || isBackgroundKeepAliveActive {
                 setupPiPAudioSession()
-            } else {
-                setupAudioSession()
             }
             sessionQueue.async { [weak self] in
                 session.startRunning()
@@ -606,8 +725,15 @@ class CameraManager: NSObject, ObservableObject {
     func startCamera() {
         // Prevent race conditions with session state lock
         sessionLock.lock()
-        // Check if already running or in the process of setting up/stopping
-        guard captureSession == nil, !isSettingUpSession, !isStoppingSession else {
+        // A stop is still in flight: remember the request and start as soon as
+        // it finishes, instead of silently ignoring a quick off-then-on.
+        if isStoppingSession {
+            isStartPendingAfterStop = true
+            sessionLock.unlock()
+            return
+        }
+        // Check if already running or in the process of setting up
+        guard captureSession == nil, !isSettingUpSession else {
             sessionLock.unlock()
             return
         }
@@ -650,6 +776,8 @@ class CameraManager: NSObject, ObservableObject {
         
         // Check if already stopping or nothing to stop
         guard !isStoppingSession else {
+            // Off again while the stop is in flight: drop any queued restart.
+            isStartPendingAfterStop = false
             sessionLock.unlock()
             return
         }
@@ -667,6 +795,18 @@ class CameraManager: NSObject, ObservableObject {
         if isPiPActive {
             stopPiP()
         }
+        // Camera off means no PiP: cancel a start that is still retrying and
+        // make sure the silent keep-alive audio never outlives the camera.
+        shouldAutoPiP = false
+        isPiPStartPending = false
+        isPiPRequestedByDeactivation = false
+        shouldStopPiPOnceStarted = false
+        pipStartGeneration += 1
+        isPiPActive = false
+        stopBackgroundKeepAlive()
+        rotationObservation?.invalidate()
+        rotationObservation = nil
+        rotationCoordinator = nil
         
         // Capture references before clearing
         let session = captureSession
@@ -703,9 +843,13 @@ class CameraManager: NSObject, ObservableObject {
             session?.stopRunning()
             
             DispatchQueue.main.async {
-                self?.sessionLock.lock()
-                self?.isStoppingSession = false
-                self?.sessionLock.unlock()
+                guard let self else { return }
+                self.sessionLock.lock()
+                self.isStoppingSession = false
+                let startRequested = self.isStartPendingAfterStop
+                self.isStartPendingAfterStop = false
+                self.sessionLock.unlock()
+                if startRequested { self.startCamera() }
             }
         }
     }
@@ -727,8 +871,10 @@ class CameraManager: NSObject, ObservableObject {
         
         // Setup front camera for selfie/mirror mode
         guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else {
+            // Previously this silently did nothing (and mislabelled the state
+            // as "restricted"); tell the tutor why the camera didn't appear.
             DispatchQueue.main.async {
-                self.authorizationStatus = .restricted
+                self.reportStatus("No camera available on this device")
             }
             return
         }
@@ -739,7 +885,7 @@ class CameraManager: NSObject, ObservableObject {
         } catch {
             print("❌ Failed to create camera input: \(error.localizedDescription)")
             DispatchQueue.main.async {
-                self.authorizationStatus = .denied
+                self.reportStatus("The camera couldn't be started. Please try again.")
             }
             return
         }
@@ -784,6 +930,14 @@ class CameraManager: NSObject, ObservableObject {
             self.captureSession = session
             self.previewLayer = layer
             self.isActive = true
+            self.setupRotationCoordinator(for: camera, previewLayer: layer)
+            
+            // PiP is only offered while the audio session category allows
+            // playback, so set the category now that the camera is on. This
+            // does not activate the session or affect other apps' audio.
+            if self.isPiPPossible {
+                self.setupPiPAudioSession(activate: false)
+            }
             
             // Setup PiP components after session is running
             if #available(iOS 15.0, *) {
@@ -945,6 +1099,8 @@ class CameraManager: NSObject, ObservableObject {
         let controller = AVPictureInPictureController(contentSource: contentSource)
         controller.delegate = self
         controller.canStartPictureInPictureAutomaticallyFromInline = true
+        // Live camera: hide the skip-forward/back buttons, which do nothing here.
+        controller.requiresLinearPlayback = true
         
         pipController = controller
         
@@ -970,8 +1126,38 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
     
+    /// Tracks the rotation the system recommends for showing this camera
+    /// upright in the app's interface, and re-applies it whenever it changes.
+    private func setupRotationCoordinator(for device: AVCaptureDevice, previewLayer: AVCaptureVideoPreviewLayer) {
+        rotationObservation?.invalidate()
+        let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
+        rotationCoordinator = coordinator
+        rotationObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.updateVideoOrientationAndMirroring()
+            }
+        }
+    }
+
     /// Updates orientation and mirroring on capture connections and the preview layer.
     private func updateVideoOrientationAndMirroring() {
+        if let coordinator = rotationCoordinator {
+            // Preferred path: the coordinator knows which camera is in use, so
+            // the front camera is no longer rotated with back-camera angles.
+            let angle = coordinator.videoRotationAngleForHorizonLevelPreview
+            for connection in [videoDataOutput?.connection(with: .video), previewLayer?.connection].compactMap({ $0 }) {
+                if connection.isVideoRotationAngleSupported(angle) {
+                    connection.videoRotationAngle = angle
+                }
+                if connection.isVideoMirroringSupported {
+                    connection.automaticallyAdjustsVideoMirroring = false
+                    connection.isVideoMirrored = isFlipped
+                }
+            }
+            return
+        }
+
+        // Fallback (no coordinator yet): interface-orientation table.
         let orientation = currentVideoOrientation
 
         if let connection = videoDataOutput?.connection(with: .video) {
@@ -1052,13 +1238,21 @@ class CameraManager: NSObject, ObservableObject {
         print("   - PiP frames enqueued: \(hasEnqueuedPiPFrame)")
         print("   - PiP start possible now: \(pipController?.isPictureInPicturePossible ?? false)")
         
+        guard isPiPPossible else {
+            reportStatus("Picture in Picture isn't supported on this device")
+            return
+        }
+        
+        // An explicit tap replaces any start made by the scene deactivating.
+        isPiPRequestedByDeactivation = false
+        shouldStopPiPOnceStarted = false
+        
         if !isActive {
             print("   → Camera not active, starting camera first...")
             shouldAutoPiP = true
+            pipStartRetryCount = 0
             startCamera()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-                self?.startPiP()
-            }
+            schedulePiPStartRetry(after: 0.8)
             return
         }
 
@@ -1069,9 +1263,8 @@ class CameraManager: NSObject, ObservableObject {
                 setupPiPController()
             }
             shouldAutoPiP = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                self?.startPiP()
-            }
+            pipStartRetryCount = 0
+            schedulePiPStartRetry(after: 0.5)
             return
         }
         
@@ -1087,8 +1280,36 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
     
+    /// Re-attempts startPiP() after a delay. The attempt is dropped if PiP was
+    /// stopped or cancelled in the meantime (generation moved on), so a
+    /// cancelled start can't come back half a second later.
+    private func schedulePiPStartRetry(after delay: TimeInterval) {
+        let generation = pipStartGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.pipStartGeneration == generation, self.shouldAutoPiP else { return }
+            self.startPiP()
+        }
+    }
+    
+    /// PiP could not be started. Ends the attempt, makes sure the silent
+    /// keep-alive audio is not left running, and tells the tutor — unless the
+    /// attempt was made automatically as the app lost focus.
+    private func handlePiPStartGaveUp() {
+        let wasAutomatic = isPiPRequestedByDeactivation
+        shouldAutoPiP = false
+        isPiPStartPending = false
+        pipStartRetryCount = 0
+        pipStartGeneration += 1
+        stopBackgroundKeepAlive()
+        if !wasAutomatic {
+            reportStatus("Picture in Picture isn't available right now")
+        }
+    }
+    
     /// Starts Picture‑in‑Picture
     func startPiP() {
+        guard isActive || isSettingUpSession else { return }
+        
         if #available(iOS 15.0, *) {
             attemptPiPControllerSetupIfReady()
         }
@@ -1096,14 +1317,12 @@ class CameraManager: NSObject, ObservableObject {
         guard let controller = pipController else {
             guard pipStartRetryCount < maxPiPStartRetries else {
                 print("❌ PiP controller not available after \(maxPiPStartRetries) retries")
-                shouldAutoPiP = false
+                handlePiPStartGaveUp()
                 return
             }
             pipStartRetryCount += 1
             print("⚠️ PiP controller not available – retry \(pipStartRetryCount)/\(maxPiPStartRetries)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                self?.startPiP()
-            }
+            schedulePiPStartRetry(after: 0.5)
             return
         }
         
@@ -1117,30 +1336,35 @@ class CameraManager: NSObject, ObservableObject {
         // few milliseconds; one request is enough.
         guard !isPiPStartPending else { return }
         
-        // Switch to playback audio session + silent audio so PiP stays alive in background
-        startBackgroundKeepAlive()
-        
         if controller.isPictureInPicturePossible {
             print("🎬 Starting PiP...")
             pipStartRetryCount = 0
             isPiPStartPending = true
+            // Silent audio so PiP stays alive in the background. Started only
+            // now that iOS says PiP can start — not while still retrying — and
+            // stopped again below / in the delegate if the start doesn't land.
+            startBackgroundKeepAlive()
             controller.startPictureInPicture()
             // If iOS never reports back, don't block PiP for good.
+            let generation = pipStartGeneration
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-                self?.isPiPStartPending = false
+                guard let self, self.pipStartGeneration == generation, self.isPiPStartPending else { return }
+                self.isPiPStartPending = false
+                if !self.isPiPActive, self.pipController?.isPictureInPictureActive != true {
+                    print("❌ PiP start was never confirmed by iOS")
+                    self.handlePiPStartGaveUp()
+                }
             }
         } else {
             guard pipStartRetryCount < maxPiPStartRetries else {
                 let layerStatus = pipSampleBufferLayer.map { String(describing: $0.status) } ?? "nil"
                 print("❌ PiP not possible after \(maxPiPStartRetries) retries (layer status: \(layerStatus), in hierarchy: \(pipSampleBufferLayer?.superlayer != nil), frames enqueued: \(hasEnqueuedPiPFrame))")
-                shouldAutoPiP = false
+                handlePiPStartGaveUp()
                 return
             }
             pipStartRetryCount += 1
             print("⚠️ PiP not possible yet – retry \(pipStartRetryCount)/\(maxPiPStartRetries)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                self?.startPiP()
-            }
+            schedulePiPStartRetry(after: 0.5)
         }
     }
     
@@ -1149,24 +1373,62 @@ class CameraManager: NSObject, ObservableObject {
         shouldAutoPiP = false
         pipStartRetryCount = 0
         isPiPStartPending = false
+        pipStartGeneration += 1 // cancels any delayed start retries
         lastPiPStopDate = Date()
-        stopBackgroundKeepAlive()
         
-        guard let controller = pipController else {
-            DispatchQueue.main.async {
-                self.isPiPActive = false
-            }
-            return
-        }
-        
-        if controller.isPictureInPictureActive {
+        if let controller = pipController, controller.isPictureInPictureActive {
             print("⏹️ Stopping PiP...")
             controller.stopPictureInPicture()
         }
         
-        DispatchQueue.main.async {
-            self.isPiPActive = false
+        isPiPActive = false
+        stopBackgroundKeepAlive()
+    }
+    
+    /// Undoes a PiP start that was triggered by the scene deactivating when
+    /// the app then came straight back without reaching the background.
+    private func cancelDeactivationPiP() {
+        let startInFlight = isPiPStartPending
+        let showing = isPiPActive || (pipController?.isPictureInPictureActive ?? false)
+        if showing || startInFlight {
+            // If iOS is still bringing PiP up, close it as soon as it reports started.
+            shouldStopPiPOnceStarted = startInFlight && !showing
+            stopPiP()
+        } else {
+            // Nothing on screen yet: just drop the intent and the retry chain.
+            // (No stop date, so leaving the app right afterwards still starts PiP.)
+            shouldAutoPiP = false
+            pipStartRetryCount = 0
+            pipStartGeneration += 1
+            stopBackgroundKeepAlive()
         }
+    }
+    
+    // MARK: - Status Messages
+    
+    /// Shows a short notice. With the camera on it appears in the camera
+    /// overlay; otherwise (the overlay isn't on screen) it is shown as an alert.
+    private func reportStatus(_ message: String) {
+        print("ℹ️ Camera status: \(message)")
+        guard isActive else {
+            statusMessage = nil
+            guard let presenter = Self.topViewController, presenter.presentedViewController == nil else { return }
+            let alert = UIAlertController(title: "Camera", message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            presenter.present(alert, animated: true)
+            return
+        }
+        statusMessage = message
+        statusMessageClearWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.statusMessage = nil }
+        statusMessageClearWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
+    }
+    
+    private static var topViewController: UIViewController? {
+        var top = activeKeyWindow?.rootViewController
+        while let presented = top?.presentedViewController { top = presented }
+        return top
     }
     
     // MARK: - Drag Position
@@ -1174,13 +1436,24 @@ class CameraManager: NSObject, ObservableObject {
     /// Updates the camera widget position, keeping it within bounds
     func updatePosition(to point: CGPoint, in bounds: CGRect) {
         // Ensure widget stays within screen bounds
-        let maxX = bounds.width - widgetSize.width
-        let maxY = bounds.height - widgetSize.height
+        let maxX = max(bounds.width - widgetSize.width, 0)
+        let maxY = max(bounds.height - widgetSize.height, 0)
         
         position = CGPoint(
             x: min(max(point.x, 0), maxX),
             y: min(max(point.y, 0), maxY)
         )
+    }
+    
+    /// Pulls the widget back inside the container after the container (rotation)
+    /// or the widget (resize, shape) changes size, so it can't be left off-screen.
+    func clampPosition(in size: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        let clamped = CGPoint(
+            x: min(max(position.x, 0), max(size.width - widgetSize.width, 0)),
+            y: min(max(position.y, 0), max(size.height - widgetSize.height, 0))
+        )
+        if clamped != position { position = clamped }
     }
 }
 
@@ -1278,6 +1551,14 @@ extension CameraManager: AVPictureInPictureControllerDelegate {
     
     func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
         print("✅ PiP did start - camera now works outside the app!")
+        if shouldStopPiPOnceStarted {
+            // This start was cancelled (the app never left the foreground)
+            // before iOS finished bringing PiP up.
+            shouldStopPiPOnceStarted = false
+            isPiPStartPending = false
+            stopPiP()
+            return
+        }
         DispatchQueue.main.async { self.isPiPStartPending = false }
         activatePiPBackgroundMode()
         ensureSessionRunning(reason: "PiP did start")
@@ -1301,15 +1582,21 @@ extension CameraManager: AVPictureInPictureControllerDelegate {
             self.isPiPActive = false
             // Don't auto-restart PiP after manual stop
             self.shouldAutoPiP = false
+            self.shouldStopPiPOnceStarted = false
+            self.pipStartGeneration += 1
+            // Covers every way PiP can close — including the X on the PiP
+            // window itself — so the silent audio never outlives PiP.
+            self.stopBackgroundKeepAlive()
         }
     }
     
     func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
         print("❌ PiP failed to start: \(error.localizedDescription)")
         DispatchQueue.main.async {
-            self.isPiPStartPending = false
             self.isPiPActive = false
-            self.shouldAutoPiP = false
+            self.shouldStopPiPOnceStarted = false
+            // Stops the keep-alive audio and tells the tutor (unless automatic).
+            self.handlePiPStartGaveUp()
         }
     }
     
@@ -1347,7 +1634,10 @@ extension CameraManager: AVPictureInPictureSampleBufferPlaybackDelegate {
         print("🎮 PiP playback state changed to: \(playing ? "playing" : "paused")")
         
         if playing {
-            startBackgroundKeepAlive()
+            // Only while PiP is really on screen, so this can't start silent audio without PiP.
+            if isPiPActive || pictureInPictureController.isPictureInPictureActive {
+                startBackgroundKeepAlive()
+            }
             ensureSessionRunning(reason: "PiP setPlaying(true)")
         } else {
             print("⏸️ User paused PiP (camera continues in background)")

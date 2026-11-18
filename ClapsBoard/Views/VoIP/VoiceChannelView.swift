@@ -7,7 +7,9 @@ import SwiftUI
 
 /// Voice Channel main view with premium UX
 struct VoiceChannelView: View {
-    @StateObject private var voiceManager = VoiceChannelManager()
+    // Shared, not owned by this screen: the channel has to keep running
+    // while the tutor goes back to the board.
+    @ObservedObject private var voiceManager = VoiceChannelManager.shared
     @State private var joinCode = ""
     @FocusState private var isCodeFocused: Bool
     
@@ -30,8 +32,19 @@ struct VoiceChannelView: View {
                                 removal: .opacity
                             ))
                     } else {
+                        // Why the last attempt or channel ended (wrong code,
+                        // microphone off, host left…) instead of silently
+                        // returning to the buttons.
+                        if let message = statusMessage {
+                            statusBanner(message)
+                        }
+                        
                         actionSection
                             .transition(.opacity)
+                    }
+                    
+                    if !voiceManager.blockedPeers.isEmpty {
+                        blockedSection
                     }
                     
                     infoSection
@@ -49,6 +62,71 @@ struct VoiceChannelView: View {
     }
     
     // MARK: - Subviews
+    
+    private var statusMessage: (text: String, isError: Bool)? {
+        if case .error(let message) = voiceManager.state { return (message, true) }
+        if let notice = voiceManager.notice { return (notice, false) }
+        return nil
+    }
+    
+    private func statusBanner(_ message: (text: String, isError: Bool)) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: message.isError ? "exclamationmark.triangle.fill" : "info.circle.fill")
+                .foregroundStyle(message.isError ? .red : .secondary)
+            Text(message.text)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background((message.isError ? Color.red : Color.gray).opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 24)
+        .accessibilityElement(children: .combine)
+    }
+    
+    private var blockedSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("BLOCKED")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 4)
+            
+            VStack(spacing: 0) {
+                ForEach(voiceManager.blockedPeers) { peer in
+                    HStack(spacing: 12) {
+                        Image(systemName: "hand.raised.fill")
+                            .foregroundStyle(.red)
+                            .frame(width: 28)
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(peer.displayName).fontWeight(.medium)
+                            if !peer.shortCode.isEmpty {
+                                Text("Device code \(peer.shortCode)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        
+                        Spacer()
+                        
+                        Button("Unblock") { voiceManager.unblockUser(peer) }
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .padding(.vertical, 12)
+                    .padding(.horizontal, 16)
+                    
+                    if peer.id != voiceManager.blockedPeers.last?.id {
+                        Divider().padding(.leading, 56)
+                    }
+                }
+            }
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .padding(.horizontal, 24)
+    }
     
     private var headerSection: some View {
         VStack(spacing: 12) {
@@ -181,14 +259,39 @@ struct ActiveSessionCard: View {
                         .foregroundStyle(statusColor)
                 }
                 
-                if case .hosting(let code) = voiceManager.state {
+                // The host keeps seeing the code after the first student
+                // connects, so more students can still be given it.
+                if let code = voiceManager.hostCode {
                     Text(code)
                         .font(.system(size: 54, weight: .black, design: .monospaced))
                         .foregroundStyle(.primary)
+                        .accessibilityLabel("Channel code \(code)")
+                    Text("Students join with this code")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 } else if case .connected = voiceManager.state {
                     Text("Connected")
                         .font(.system(size: 32, weight: .bold, design: .rounded))
+                } else if case .joining = voiceManager.state {
+                    Text("Looking for the channel…")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
                 }
+                
+                if !voiceManager.isAudioActive, voiceManager.state != .joining {
+                    Label("Microphone paused", systemImage: "mic.slash")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.orange)
+                } else if voiceManager.isMuted {
+                    Label("You are muted", systemImage: "mic.slash")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.red)
+                }
+                
+                Text("Stays on while you use the board. Ends if you leave ClapsBoard.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
             
             // Visualizer & Control
@@ -227,12 +330,15 @@ struct ActiveSessionCard: View {
             // Peer List
             if !voiceManager.connectedPeers.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("STUDENTS CONNECTED")
+                    Text("CONNECTED")
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.secondary)
                     
                     VStack(spacing: 0) {
                         ForEach(voiceManager.connectedPeers) { peer in
+                            // Each peer has its own level, so only the person
+                            // actually talking lights up.
+                            let level = voiceManager.peerAudioLevels[peer.id] ?? 0
                             HStack(spacing: 12) {
                                 ZStack {
                                     Circle().fill(AppTheme.accent.opacity(0.1)).frame(width: 40, height: 40)
@@ -242,22 +348,30 @@ struct ActiveSessionCard: View {
                                     Circle()
                                         .stroke(Color.green, lineWidth: 2)
                                         .frame(width: 44, height: 44)
-                                        .scaleEffect(1.0 + CGFloat(voiceManager.remoteAudioLevel * 0.3))
-                                        .opacity(Double(voiceManager.remoteAudioLevel))
+                                        .scaleEffect(1.0 + CGFloat(level * 0.3))
+                                        .opacity(Double(level))
                                 }
 
-                                Text(peer.displayName)
-                                    .fontWeight(.medium)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(peer.displayName)
+                                        .fontWeight(.medium)
+                                    if !peer.shortCode.isEmpty {
+                                        Text("Device code \(peer.shortCode)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
 
                                 Spacer()
 
-                                if voiceManager.remoteAudioLevel > 0.05 {
+                                if level > 0.05 {
                                     Image(systemName: "waveform")
                                         .foregroundStyle(.green)
                                 }
                             }
                             .padding(.vertical, 12)
                             .padding(.horizontal, 16)
+                            .contentShape(Rectangle())
                             .contextMenu {
                                 Button(role: .destructive) {
                                     voiceManager.blockUser(peer)
@@ -279,6 +393,10 @@ struct ActiveSessionCard: View {
                     }
                     .background(Color(.secondarySystemGroupedBackground))
                     .clipShape(RoundedRectangle(cornerRadius: 16))
+                    
+                    Text("Touch and hold a name to block or report.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
             }
             

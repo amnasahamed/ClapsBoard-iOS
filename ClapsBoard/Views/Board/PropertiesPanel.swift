@@ -30,7 +30,7 @@ struct PropertiesPanel: View {
                 ColorPicker(selectedColor: $viewModel.color)
                 
                 // Text Size Slider
-                TextSizePicker(size: $viewModel.strokeWidth)
+                TextSizePicker(size: $viewModel.textSize)
                 
                 // Text Alignment
                 TextAlignmentPicker(alignment: $viewModel.textAlign)

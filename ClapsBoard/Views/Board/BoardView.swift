@@ -42,10 +42,12 @@ struct BoardView: View {
     // Haptic feedback for shake gesture
     private let notificationFeedback = UINotificationFeedbackGenerator()
 
-    // iPad split-view state persistence
-    @SceneStorage("canvasZoom") private var storedZoom: Double = 1.0
-    @SceneStorage("canvasPanX") private var storedPanX: Double = 0
-    @SceneStorage("canvasPanY") private var storedPanY: Double = 0
+    @State private var showDeletePageConfirm = false
+    @State private var exportMessage: String?
+    /// Lesson whose page is on the board, to tell a page flip from a lesson switch.
+    @State private var loadedLessonId: UUID?
+    /// Teach Mode only turns the camera back off if it was the one to turn it on.
+    @State private var teachTurnedCameraOn = false
 
     // One fixed size. Element coordinates are absolute and the view is centred
     // on canvasSize / 2, so the size must never change. It used to switch to
@@ -62,6 +64,12 @@ struct BoardView: View {
             let usesSideSplit = showDocumentBesideBoard && geometry.size.width > geometry.size.height
             let boardWidth = usesSideSplit ? geometry.size.width * boardSplitRatio : geometry.size.width
             let boardHeight = showDocumentBesideBoard && !usesSideSplit ? geometry.size.height * boardSplitRatio : geometry.size.height
+            // Live pinch value, held to the same limits as the committed zoom.
+            let liveZoom = max(0.1, min(maximumSafeZoom, viewModel.zoom * magnificationState))
+            // The canvas scales about its own centre and is then offset by
+            // pan, so scaling pan by the same factor keeps whatever is at the
+            // centre of the board area in place while zooming.
+            let liveZoomRatio = liveZoom / max(viewModel.zoom, 0.0001)
             ZStack {
                 ZStack {
                     CanvasBackground(gridStyle: viewModel.gridStyle)
@@ -74,8 +82,8 @@ struct BoardView: View {
                     )
                         .frame(width: canvasSize, height: canvasSize)
                 }
-                .scaleEffect(viewModel.zoom * magnificationState)
-                .offset(x: viewModel.pan.x, y: viewModel.pan.y)
+                .scaleEffect(liveZoom)
+                .offset(x: viewModel.pan.x * liveZoomRatio, y: viewModel.pan.y * liveZoomRatio)
                 .gesture(
                     MagnificationGesture()
                         .updating($magnificationState) { value, state, _ in
@@ -95,6 +103,10 @@ struct BoardView: View {
                                 generator.impactOccurred()
                             }
 
+                            // Same anchoring as the live preview above, so
+                            // nothing jumps when the fingers lift.
+                            let ratio = clampedZoom / max(viewModel.zoom, 0.0001)
+                            viewModel.pan = CGPoint(x: viewModel.pan.x * ratio, y: viewModel.pan.y * ratio)
                             viewModel.zoom = clampedZoom
                             releaseDrawingSuppressionAfterCanvasTransform()
                         }
@@ -123,6 +135,9 @@ struct BoardView: View {
                 .simultaneousGesture(
                     TapGesture(count: 2)
                         .onEnded {
+                            // Only with the navigation tools. With a pen, two
+                            // quick dots (":" or "=") must not reset the view.
+                            guard viewModel.tool == .pan || viewModel.tool == .select else { return }
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                                 viewModel.zoom = 1.0
                                 viewModel.pan = .zero
@@ -147,12 +162,14 @@ struct BoardView: View {
                     .accessibilityLabel("Tap anywhere to begin")
                 }
 
+                // Teach Mode swaps the header for its own bar but keeps the
+                // drawing toolbar (tools, undo/redo, eraser) on screen.
+                controlsLayer(in: geometry, availableSize: CGSize(width: boardWidth, height: boardHeight), showsHeader: !isTeachMode)
+                    .frame(width: boardWidth, height: boardHeight)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
                 if isTeachMode {
                     teachModeControls(in: geometry)
-                        .frame(width: boardWidth, height: boardHeight)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                } else {
-                    controlsLayer(in: geometry, availableSize: CGSize(width: boardWidth, height: boardHeight))
                         .frame(width: boardWidth, height: boardHeight)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
@@ -239,25 +256,20 @@ struct BoardView: View {
         }
         .ignoresSafeArea()
         .animation(.easeOut(duration: 0.2), value: viewModel.zoom)
-        // Keyboard shortcuts for undo/redo (Cmd+Z for undo, Cmd+Shift+Z for redo)
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Button("Undo") {
-                    if viewModel.canUndo {
-                        viewModel.undo()
-                    }
-                }
-                .keyboardShortcut("z", modifiers: .command)
-                .hidden()
-
-                Button("Redo") {
-                    if viewModel.canRedo {
-                        viewModel.redo()
-                    }
-                }
-                .keyboardShortcut("z", modifiers: [.command, .shift])
-                .hidden()
+        // Cmd+Z / Shift+Cmd+Z for a hardware keyboard. These live in an
+        // always-present, invisible background: in the `.keyboard` toolbar
+        // they only existed while the software keyboard was up.
+        .background {
+            Group {
+                Button("Undo") { if viewModel.canUndo { viewModel.undo() } }
+                    .keyboardShortcut("z", modifiers: .command)
+                Button("Redo") { if viewModel.canRedo { viewModel.redo() } }
+                    .keyboardShortcut("z", modifiers: [.command, .shift])
             }
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
         // Clear Confirmation
         .alert("Clear Whiteboard?", isPresented: $showClearConfirm) {
@@ -267,6 +279,20 @@ struct BoardView: View {
             }
         } message: {
             Text("This will remove all drawings and notes permanently.")
+        }
+        .alert("Delete Page?", isPresented: $showDeletePageConfirm) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive, action: deletePage)
+        } message: {
+            Text("\u{201C}\(lessonStore.activePage.title)\u{201D} and everything on it will be removed. This can't be undone.")
+        }
+        .alert(
+            "Export",
+            isPresented: Binding(get: { exportMessage != nil }, set: { if !$0 { exportMessage = nil } })
+        ) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(exportMessage ?? "")
         }
         // Export Sheet
         .sheet(isPresented: $showExportSheet, onDismiss: {
@@ -286,7 +312,8 @@ struct BoardView: View {
                 store: lessonStore,
                 onOpen: loadActiveLesson,
                 onTeach: startTeachMode,
-                onActiveLessonDeleted: reloadActiveLessonPage
+                onActiveLessonDeleted: reloadActiveLessonPage,
+                onLessonDeleted: purgeUnreferencedMedia
             )
         }
         .sheet(isPresented: $showMathToolkit) {
@@ -354,6 +381,10 @@ struct BoardView: View {
             if let image = image {
                 exportedImage = image
                 showExportSheet = true
+            } else {
+                exportMessage = viewModel.calculateContentBounds() == nil
+                    ? "There is nothing on this page to export yet."
+                    : "The image could not be created. Please try again."
             }
         }
     }
@@ -365,14 +396,22 @@ struct BoardView: View {
 
     /// Puts the store's active page on the board without closing the library.
     private func reloadActiveLessonPage() {
-        viewModel.loadLessonPage(lessonStore.activePage)
+        // Zoom and pan survive a page change; a different lesson starts centred.
+        let isNewLesson = loadedLessonId != lessonStore.activeLessonId
+        loadedLessonId = lessonStore.activeLessonId
+        viewModel.loadLessonPage(lessonStore.activePage, resetView: isNewLesson)
         hidePreparedAnswers()
     }
 
     private func openPage(_ id: UUID) {
         lessonStore.openPage(id)
-        viewModel.loadLessonPage(lessonStore.activePage)
-        hidePreparedAnswers()
+        reloadActiveLessonPage()
+    }
+
+    /// Removes image files that no page of any lesson (and no undo step of the
+    /// open page) uses any more. Called after a page or lesson is deleted.
+    private func purgeUnreferencedMedia() {
+        StorageService.shared.purgeMedia(keeping: lessonStore.referencedMediaIds.union(viewModel.referencedMediaIds))
     }
 
     private func addPage() {
@@ -383,6 +422,7 @@ struct BoardView: View {
     private func deletePage() {
         lessonStore.deleteActivePage()
         loadActiveLesson()
+        purgeUnreferencedMedia()
     }
 
     private func startTeachMode() {
@@ -399,7 +439,8 @@ struct BoardView: View {
             lessonStore.updateStudent(student)
         }
         viewModel.showProperties = false
-        if !cameraManager.isActive { cameraManager.toggleCamera() }
+        teachTurnedCameraOn = !cameraManager.isActive
+        if teachTurnedCameraOn { cameraManager.toggleCamera() }
     }
 
     private func stopTeachMode() {
@@ -413,37 +454,59 @@ struct BoardView: View {
         isTeachMode = false
         teachStartedAt = nil
         teachHistoryId = nil
+        // Leave the camera as it was found: off again if Teach Mode started it.
+        if teachTurnedCameraOn, cameraManager.isActive { cameraManager.toggleCamera() }
+        teachTurnedCameraOn = false
     }
 
     private func exportLessonPDF() {
-        guard !isExporting else { return }
-        isExporting = true
+        guard !isExporting && !showExportSheet else { return }
         let lesson = lessonStore.activeLesson
-        let pageBounds = CGRect(x: 0, y: 0, width: 842, height: 595)
-        let renderer = UIGraphicsPDFRenderer(bounds: pageBounds)
-        let data = renderer.pdfData { context in
-            for page in lesson.pages {
-                context.beginPage()
-                let title = "\(lesson.title) — \(page.title)"
-                title.draw(at: CGPoint(x: 32, y: 22), withAttributes: [.font: UIFont.boldSystemFont(ofSize: 18), .foregroundColor: UIColor.label])
-                if let image = viewModel.exportImage(elements: page.elements, gridStyle: page.gridStyle) {
-                    let available = CGRect(x: 32, y: 58, width: pageBounds.width - 64, height: pageBounds.height - 90)
-                    let scale = min(available.width / image.size.width, available.height / image.size.height)
-                    let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-                    image.draw(in: CGRect(x: available.midX - size.width / 2, y: available.midY - size.height / 2, width: size.width, height: size.height))
+        let layers = viewModel.visibleLayers
+        guard lesson.pages.contains(where: { page in
+            page.elements.contains { !$0.isDeleted && layers.contains($0.layer ?? .base) }
+        }) else {
+            exportMessage = "There is nothing in this lesson to export yet."
+            return
+        }
+        isExporting = true
+        Task { @MainActor in
+            // The pages render on the main thread. Give SwiftUI a moment to
+            // put the spinner on screen first, or it never appears.
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            defer { isExporting = false }
+
+            let pageBounds = CGRect(x: 0, y: 0, width: 842, height: 595)
+            let renderer = UIGraphicsPDFRenderer(bounds: pageBounds)
+            // A fixed dark colour: UIColor.label turns white in Dark Mode and
+            // the PDF page is always white.
+            let titleAttributes: [NSAttributedString.Key: Any] = [
+                .font: UIFont.boldSystemFont(ofSize: 18),
+                .foregroundColor: UIColor(red: 0.12, green: 0.16, blue: 0.23, alpha: 1)
+            ]
+            let data = renderer.pdfData { context in
+                for page in lesson.pages {
+                    context.beginPage()
+                    let title = "\(lesson.title) — \(page.title)"
+                    title.draw(at: CGPoint(x: 32, y: 22), withAttributes: titleAttributes)
+                    if let image = viewModel.exportImage(elements: page.elements, gridStyle: page.gridStyle) {
+                        let available = CGRect(x: 32, y: 58, width: pageBounds.width - 64, height: pageBounds.height - 90)
+                        let scale = min(available.width / image.size.width, available.height / image.size.height)
+                        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+                        image.draw(in: CGRect(x: available.midX - size.width / 2, y: available.midY - size.height / 2, width: size.width, height: size.height))
+                    }
                 }
             }
+            let safeName = lesson.title.replacingOccurrences(of: "/", with: "-")
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(safeName)-lesson.pdf")
+            do {
+                try data.write(to: url, options: .atomic)
+                exportedPDFURL = url
+                showExportSheet = true
+            } catch {
+                exportMessage = "The lesson PDF could not be saved: \(error.localizedDescription)"
+            }
         }
-        let safeName = lesson.title.replacingOccurrences(of: "/", with: "-")
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(safeName)-lesson.pdf")
-        do {
-            try data.write(to: url, options: .atomic)
-            exportedPDFURL = url
-            showExportSheet = true
-        } catch {
-            print("❌ Lesson PDF export failed: \(error.localizedDescription)")
-        }
-        isExporting = false
     }
 
     @ViewBuilder
@@ -462,12 +525,26 @@ struct BoardView: View {
 
                 Spacer()
 
+                // Header is hidden in Teach Mode, so page controls open from here.
+                Button { withAnimation { showPageSwitcher.toggle() } } label: {
+                    Image(systemName: "rectangle.stack")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 48, height: 48)
+                        .background(showPageSwitcher ? AppTheme.accent : Color.black.opacity(0.84), in: Circle())
+                }
+                .accessibilityLabel("Page switcher")
+                .accessibilityValue(showPageSwitcher ? "Visible" : "Hidden")
+
                 Button(action: stopTeachMode) {
                     Label("Finish", systemImage: "stop.fill").font(.caption.bold()).foregroundStyle(.white)
                         .padding(.horizontal, 14).frame(height: 48).background(.red, in: Capsule())
                 }
             }
             .padding(.horizontal, 12)
+            // In landscape the toolbar is a rail down the right edge; keep
+            // Finish clear of it.
+            .padding(.trailing, geometry.size.width > geometry.size.height ? resolvedSafeAreaInsets(for: geometry).trailing + 64 : 0)
             .padding(.top, resolvedSafeAreaInsets(for: geometry).top + 8)
             Spacer()
         }
@@ -502,7 +579,8 @@ struct BoardView: View {
                 Button(action: addPage) { Image(systemName: "plus").frame(width: 40, height: 40).background(AppTheme.accent, in: Circle()).foregroundStyle(.white) }
 
                 if lesson.pages.count > 1 {
-                    Button(role: .destructive, action: deletePage) { Image(systemName: "trash").frame(width: 40, height: 40) }
+                    Button(role: .destructive) { showDeletePageConfirm = true } label: { Image(systemName: "trash").frame(width: 40, height: 40) }
+                        .accessibilityLabel("Delete page")
                 }
             }
             .padding(4)
@@ -594,24 +672,26 @@ struct BoardView: View {
     }
 
     @ViewBuilder
-    private func controlsLayer(in geometry: GeometryProxy, availableSize: CGSize) -> some View {
+    private func controlsLayer(in geometry: GeometryProxy, availableSize: CGSize, showsHeader: Bool = true) -> some View {
         if geometry.size.width > geometry.size.height {
-            landscapeControlRails(in: geometry, availableSize: availableSize)
+            landscapeControlRails(in: geometry, availableSize: availableSize, showsHeader: showsHeader)
         } else {
-            portraitControlStack(in: geometry)
+            portraitControlStack(in: geometry, showsHeader: showsHeader)
         }
     }
 
     @ViewBuilder
-    private func portraitControlStack(in geometry: GeometryProxy) -> some View {
+    private func portraitControlStack(in geometry: GeometryProxy, showsHeader: Bool) -> some View {
         let safeAreaInsets = resolvedSafeAreaInsets(for: geometry)
         let headerY = safeAreaInsets.top + 43
         let bottomControlPadding = safeAreaInsets.bottom + 8
         let propertiesPanelMaxWidth = min(geometry.size.width - 32, 420)
 
         Group {
-            headerControls(orientation: .horizontal)
-                .position(x: geometry.size.width / 2, y: headerY)
+            if showsHeader {
+                headerControls(orientation: .horizontal)
+                    .position(x: geometry.size.width / 2, y: headerY)
+            }
 
             VStack(spacing: 16) {
                 if viewModel.showProperties && viewModel.tool.supportsProperties {
@@ -631,7 +711,7 @@ struct BoardView: View {
         }
     }
 
-    private func landscapeControlRails(in geometry: GeometryProxy, availableSize: CGSize) -> some View {
+    private func landscapeControlRails(in geometry: GeometryProxy, availableSize: CGSize, showsHeader: Bool) -> some View {
         let metrics = BoardFloatingRailMetrics(
             containerSize: availableSize,
             safeAreaInsets: resolvedSafeAreaInsets(for: geometry),
@@ -639,7 +719,9 @@ struct BoardView: View {
         )
 
         return BoardFloatingSideRails(metrics: metrics) {
-            headerControls(orientation: .vertical)
+            if showsHeader {
+                headerControls(orientation: .vertical)
+            }
         } trailing: {
             HStack(spacing: metrics.controlClusterSpacing) {
                 if viewModel.showProperties && viewModel.tool.supportsProperties {
@@ -1266,6 +1348,8 @@ struct LessonLibraryView: View {
     let onOpen: () -> Void
     let onTeach: () -> Void
     let onActiveLessonDeleted: () -> Void
+    /// Runs after any lesson is deleted (once the board has moved on).
+    var onLessonDeleted: () -> Void = { }
     @Environment(\.dismiss) private var dismiss
     @State private var lessonPendingDelete: TutorLesson?
     @State private var selectedStudentId: UUID
@@ -1274,7 +1358,8 @@ struct LessonLibraryView: View {
     @State private var homeworkTitle = ""
     @State private var localDocumentNames: [String] = []
 
-    init(store: LessonStore, onOpen: @escaping () -> Void, onTeach: @escaping () -> Void, onActiveLessonDeleted: @escaping () -> Void) {
+    init(store: LessonStore, onOpen: @escaping () -> Void, onTeach: @escaping () -> Void, onActiveLessonDeleted: @escaping () -> Void, onLessonDeleted: @escaping () -> Void = { }) {
+        self.onLessonDeleted = onLessonDeleted
         self.store = store
         self.onOpen = onOpen
         self.onTeach = onTeach
@@ -1460,6 +1545,7 @@ struct LessonLibraryView: View {
         // The store has moved on to another lesson. The board must follow,
         // or the next stroke writes the deleted lesson's drawing into it.
         if wasActive { onActiveLessonDeleted() }
+        onLessonDeleted()
     }
 
     private var selectedStudent: StudentFolder? {
