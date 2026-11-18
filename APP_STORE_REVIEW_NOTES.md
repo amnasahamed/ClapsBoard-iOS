@@ -14,6 +14,7 @@ Tutors can show a live mirror of their front camera in Picture-in-Picture and ke
 
 - The `audio` background mode ("Audio, AirPlay, and Picture in Picture"), which Picture-in-Picture requires.
 - The `com.apple.developer.avfoundation.multitasking-camera-access` entitlement, so the capture session keeps running while the PiP window is visible.
+- The `voip` background mode, declared only because App Store Connect requires it alongside the multitasking-camera-access entitlement. The app does not use CallKit, PushKit or VoIP pushes, and does nothing in the background under this mode.
 - A **silent audio stream** played through `AVAudioEngine`, whose only purpose is to keep the PiP camera feed running while the app is in the background. No sound is heard and nothing is recorded.
   - It starts when iOS reports that PiP can start and the app asks for it, and again each time the app leaves the foreground with PiP showing. It is restarted if the system stops it (for example after a phone call) while PiP is still showing.
   - It stops when PiP closes for any reason (the in-app PiP button, the close button on the PiP window, or returning to the app from the PiP window), when PiP fails to start, when the camera is turned off, and whenever the app returns to the foreground.
@@ -21,7 +22,7 @@ Tutors can show a live mirror of their front camera in Picture-in-Picture and ke
 
 The app does not configure or activate an audio session at launch. With the camera mirror on, the audio session category is set to playback (mixing with other audio) so PiP is available; the session is active only while the silent audio above is playing.
 
-The camera mirror is a live preview only: its video is never recorded, saved or uploaded. Separately, Docs → Take Photo opens the system camera to take one photo, which is saved as a document on the device only. The app does not use the `voip` background mode.
+The camera mirror is a live preview only: its video is never recorded, saved or uploaded. Separately, Docs → Take Photo opens the system camera to take one photo, which is saved as a document on the device only.
 
 **Voice Channel (Settings → Voice Channel)**
 
