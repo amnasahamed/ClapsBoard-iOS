@@ -296,6 +296,36 @@ struct DrawingCanvas: View {
     
     // MARK: - Drawing Functions
     private func drawElement(_ element: DrawingElement, in context: inout GraphicsContext) {
+        guard element.rotation != 0 else {
+            drawUnrotatedElement(element, in: &context)
+            return
+        }
+        // A copy has its own transform but draws into the same canvas.
+        var rotated = context
+        let pivot = element.rotationPivot
+        rotated.translateBy(x: pivot.x, y: pivot.y)
+        rotated.rotate(by: .radians(element.rotation))
+        rotated.translateBy(x: -pivot.x, y: -pivot.y)
+        drawUnrotatedElement(element, in: &rotated)
+    }
+
+    /// Decoded images by media id. Without it every canvas redraw (each point
+    /// of a pen stroke) decoded every photo on the board again.
+    private static let imageCache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 24
+        return cache
+    }()
+
+    private func image(for element: DrawingElement) -> UIImage? {
+        guard let id = element.mediaId else { return nil }
+        if let cached = Self.imageCache.object(forKey: id as NSString) { return cached }
+        guard let data = element.imageData, let image = UIImage(data: data) else { return nil }
+        Self.imageCache.setObject(image, forKey: id as NSString)
+        return image
+    }
+
+    private func drawUnrotatedElement(_ element: DrawingElement, in context: inout GraphicsContext) {
         let color = element.color.color
         
         switch element.type {
@@ -392,7 +422,7 @@ struct DrawingCanvas: View {
             }
             
         case .image:
-            if let data = element.imageData, let uiImage = UIImage(data: data) {
+            if let uiImage = image(for: element) {
                 let rect = CGRect(x: element.x, y: element.y, width: element.width, height: element.height)
                 context.draw(Image(uiImage: uiImage), in: rect)
             }
@@ -491,6 +521,8 @@ struct DrawingCanvas: View {
 
     private func hitTest(_ point: CGPoint, for element: DrawingElement) -> Bool {
         let threshold: CGFloat = 20
+        // Test in the element's own unrotated space.
+        let point = element.unrotated(point)
         
         // Fast-path: Bounding box check first
         let rect = element.selectionBounds.insetBy(dx: -threshold, dy: -threshold)
@@ -541,14 +573,10 @@ struct DrawingCanvas: View {
     }
 
     private func movedElement(_ element: DrawingElement, by offset: CGSize) -> DrawingElement {
-        var modified = element
-        modified.x += offset.width
-        modified.y += offset.height
-        modified.points = modified.points.map { CGPoint(x: $0.x + offset.width, y: $0.y + offset.height) }
-        return modified
+        element.moved(by: offset)
     }
     
-    private func eraseAt(_ point: CGPoint) {
+    private func eraseAt(_ touch: CGPoint) {
         let eraserRadius = viewModel.eraserSize / 2
         
         var elementsChanged = false
@@ -559,6 +587,8 @@ struct DrawingCanvas: View {
             
             let element = updatedElements[i]
             let strokeBuffer = element.strokeWidth / 2
+            // Test in the element's own unrotated space.
+            let point = element.unrotated(touch)
             
             let shouldDelete: Bool
             switch element.type {
@@ -683,6 +713,14 @@ fileprivate extension DrawingElement {
         }
     }
 
+    func moved(by offset: CGSize) -> DrawingElement {
+        var modified = self
+        modified.x += offset.width
+        modified.y += offset.height
+        modified.points = modified.points.map { CGPoint(x: $0.x + offset.width, y: $0.y + offset.height) }
+        return modified
+    }
+
     func resized(from oldBounds: CGRect, to newBounds: CGRect) -> DrawingElement {
         var modified = self
         let oldWidth = max(oldBounds.width, 1)
@@ -747,10 +785,16 @@ struct SelectionOverlay: View {
     
     @State private var resizeOriginal: DrawingElement?
     @State private var resizeDidMove = false
+    @State private var rotateOriginal: DrawingElement?
+
+    /// The overlay's own unrotated space (= canvas coordinates). Handle drags
+    /// are measured here: the handles' local space turns with the element.
+    private static let overlaySpace = "selectionOverlay"
     
     var body: some View {
-        GeometryReader { _ in
+        GeometryReader { geometry in
             let bounds = elementBounds
+            let pivot = element.rotationPivot
 
             ZStack {
                 // Selection rectangle
@@ -784,10 +828,68 @@ struct SelectionOverlay: View {
                 .accessibilityLabel("Delete selected element")
                 .accessibilityHint("Removes the selected drawing element from the canvas")
                 .position(x: bounds.maxX + 24, y: bounds.minY - 24)
+
+                // Rotate handle, above the middle of the top edge
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(width: 30, height: 30)
+                    .background(Color.white.opacity(0.96), in: Circle())
+                    .overlay(Circle().stroke(AppTheme.accent, lineWidth: 1.5))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
+                    .accessibilityLabel("Rotate handle")
+                    .accessibilityHint("Drag around the element to rotate it")
+                    .accessibilityAddTraits(.allowsDirectInteraction)
+                    .position(x: bounds.midX, y: bounds.minY - 48)
+                    .gesture(rotateGesture)
             }
+            // Outline and handles turn with the element, about the same pivot
+            // the canvas draws it with.
+            .rotationEffect(
+                .radians(element.rotation),
+                anchor: UnitPoint(x: pivot.x / max(geometry.size.width, 1), y: pivot.y / max(geometry.size.height, 1))
+            )
             .accessibilityLabel("Selected element")
-            .accessibilityHint("Drag the element to move it, drag corner handles to resize it, or tap delete to remove it")
+            .accessibilityHint("Drag the element to move it, drag corner handles to resize it, drag the top handle to rotate it, or tap delete to remove it")
         }
+        .coordinateSpace(.named(Self.overlaySpace))
+    }
+
+    private var rotateGesture: some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.overlaySpace))
+            .onChanged { value in
+                if rotateOriginal == nil { rotateOriginal = element }
+                viewModel.isManipulatingSelection = true
+                // Resting a finger on the handle is not a rotation.
+                guard let original = rotateOriginal,
+                      hypot(value.translation.width, value.translation.height) > 3 else { return }
+                // Turn by the angle the finger has swept around the pivot
+                // (rotating does not move the pivot).
+                let pivot = original.rotationPivot
+                let start = atan2(value.startLocation.y - pivot.y, value.startLocation.x - pivot.x)
+                let current = atan2(value.location.y - pivot.y, value.location.x - pivot.x)
+                var angle = (original.rotation + current - start).truncatingRemainder(dividingBy: 2 * .pi)
+                if angle > .pi { angle -= 2 * .pi }
+                if angle <= -.pi { angle += 2 * .pi }
+                // Snap within 5° of upright and the quarter turns.
+                let quarter = (angle / (.pi / 2)).rounded() * (.pi / 2)
+                if abs(angle - quarter) < 5 * .pi / 180 { angle = quarter }
+                if abs(angle) == .pi { angle = .pi } // one value for 180°
+                var rotated = original
+                rotated.rotation = angle
+                viewModel.updateElement(rotated)
+                viewModel.selectedElement = rotated
+            }
+            .onEnded { _ in
+                // One undo step, and only if the angle really changed.
+                if let original = rotateOriginal,
+                   let current = viewModel.selectedElement, current.id == original.id, current.rotation != original.rotation {
+                    viewModel.commitChange(description: "Element rotated")
+                }
+                rotateOriginal = nil
+                viewModel.isManipulatingSelection = false
+            }
     }
     
     private var elementBounds: CGRect {
@@ -804,7 +906,7 @@ struct SelectionOverlay: View {
     }
 
     private func resizeGesture(for position: HandlePosition) -> some Gesture {
-        DragGesture(minimumDistance: 0)
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.overlaySpace))
             .onChanged { value in
                 if resizeOriginal == nil {
                     resizeOriginal = element
@@ -817,7 +919,9 @@ struct SelectionOverlay: View {
                     resizeDidMove = true
                 }
                 guard let original = resizeOriginal else { return }
-                let resized = resizedElement(original, from: position, by: value.translation)
+                let resized = original.rotation == 0
+                    ? resizedElement(original, from: position, by: value.translation)
+                    : resizedRotatedElement(original, from: position, by: value.translation)
                 viewModel.updateElement(resized)
                 viewModel.selectedElement = resized
             }
@@ -900,6 +1004,20 @@ struct SelectionOverlay: View {
         }
 
         return element.resized(from: originalBounds, to: newBounds)
+    }
+
+    /// Resizes a rotated element: the drag is turned into the element's own
+    /// unrotated space, and the result is shifted so the corner opposite the
+    /// handle stays put on screen (resizing moves the pivot, which would
+    /// otherwise swing the whole element).
+    private func resizedRotatedElement(_ element: DrawingElement, from handle: HandlePosition, by translation: CGSize) -> DrawingElement {
+        let c = cos(element.rotation), s = sin(element.rotation)
+        let local = CGSize(width: translation.width * c + translation.height * s,
+                           height: -translation.width * s + translation.height * c)
+        let resized = resizedElement(element, from: handle, by: local)
+        let before = element.rotationPivot, after = resized.rotationPivot
+        let dx = before.x - after.x, dy = before.y - after.y
+        return resized.moved(by: CGSize(width: dx - (dx * c - dy * s), height: dy - (dx * s + dy * c)))
     }
 }
 

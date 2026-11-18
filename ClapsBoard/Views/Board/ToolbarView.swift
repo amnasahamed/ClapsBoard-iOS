@@ -16,6 +16,8 @@ enum BoardControlOrientation {
 struct ToolbarView: View {
     @ObservedObject var viewModel: CanvasViewModel
     var orientation: BoardControlOrientation = .horizontal
+    /// Opens the photo picker (owned by BoardView, which places the image).
+    var onInsertImage: () -> Void = {}
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let feedback = UIImpactFeedbackGenerator(style: .light)
@@ -92,7 +94,7 @@ struct ToolbarView: View {
             )
         }
 
-        ToolOverflowMenu(viewModel: viewModel, primaryTools: primaryTools, selectTool: selectTool)
+        ToolOverflowMenu(viewModel: viewModel, primaryTools: primaryTools, selectTool: selectTool, onInsertImage: onInsertImage)
     }
 
     private func selectTool(_ tool: ToolType) {
@@ -128,6 +130,7 @@ private struct ToolOverflowMenu: View {
     @ObservedObject var viewModel: CanvasViewModel
     let primaryTools: [ToolType]
     let selectTool: (ToolType) -> Void
+    let onInsertImage: () -> Void
 
     private static let allSecondaryTools: [ToolType] = [
         .select,
@@ -153,6 +156,10 @@ private struct ToolOverflowMenu: View {
                 } label: {
                     Label(tool.displayName, systemImage: tool.iconName)
                 }
+            }
+            // Not a drawing tool: it opens the photo picker straight away.
+            Button(action: onInsertImage) {
+                Label(ToolType.image.displayName, systemImage: ToolType.image.iconName)
             }
         } label: {
             ZStack {

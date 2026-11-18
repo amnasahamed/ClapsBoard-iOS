@@ -298,6 +298,25 @@ extension DrawingElement {
         }
     }
 
+    /// The point `rotation` turns the element about: the centre of what is
+    /// drawn. One definition for the canvas, hit testing and the exporter.
+    /// (For shapes, images and strokes this is the centre of the stored box;
+    /// text and stickers store an anchor point instead, so they are measured.)
+    var rotationPivot: CGPoint {
+        let bounds = contentBounds
+        return CGPoint(x: bounds.midX, y: bounds.midY)
+    }
+
+    /// `point` as the element sees it before its rotation is applied, so the
+    /// unrotated hit tests can be used on a rotated element.
+    func unrotated(_ point: CGPoint) -> CGPoint {
+        guard rotation != 0 else { return point }
+        let pivot = rotationPivot
+        let dx = point.x - pivot.x, dy = point.y - pivot.y
+        let c = cos(-rotation), s = sin(-rotation)
+        return CGPoint(x: pivot.x + dx * c - dy * s, y: pivot.y + dx * s + dy * c)
+    }
+
     /// Distance from `point` to the drawn outline of a rectangle or ellipse
     /// (0 on the line, growing both inside and outside the shape).
     func distanceToShapeOutline(from point: CGPoint) -> CGFloat {

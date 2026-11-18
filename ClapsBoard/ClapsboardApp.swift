@@ -41,7 +41,8 @@ struct ClapsboardApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     guard phase == .active else { return }
                     // Permission may have been changed in iOS Settings, and
-                    // repeating classes need their reminder window rolled forward.
+                    // one-shot reminders (classes not yet on a repeating
+                    // trigger) need their window rolled forward.
                     notificationManager.refreshAuthorizationStatus()
                     notificationManager.rescheduleAll(sessions: sessionManager.sessions)
                 }
@@ -142,8 +143,9 @@ class NotificationManager: ObservableObject {
     private var minutesBefore: Int { (UserDefaults.standard.object(forKey: Self.reminderMinutesKey) as? Int) ?? 5 }
 
     // iOS keeps at most 64 pending requests per app; stay well below it.
+    // (A repeating request counts once, however often it fires.)
     static let maxPendingReminders = 40
-    /// Per class, so one daily class cannot use the whole budget.
+    /// One-shot reminders per class, so one class cannot use the whole budget.
     static let maxRemindersPerClass = 8
 
     private var rescheduleGeneration = 0
@@ -215,27 +217,58 @@ class NotificationManager: ObservableObject {
         }
     }
 
-    /// Builds the reminder requests: the soonest not-completed occurrences in
-    /// the next few months, identified as "<uuid>-<yyyyMMdd>".
+    /// Builds the reminder requests.
+    /// - A repeating class that has started (or starts within one repeat
+    ///   period) gets ONE repeating request, "<uuid>-repeat", so it keeps
+    ///   reminding however long the app stays closed.
+    /// - Everything else gets one-shot requests for its soonest not-completed
+    ///   occurrences in the next few months, "<uuid>-<yyyyMMdd>".
+    /// Both identifiers start with the class id (see `cancelNotification`).
     static func reminderRequests(for sessions: [ClassSession], minutesBefore: Int, now: Date) -> [UNNotificationRequest] {
         let end = ClassSessionManager.horizonEnd(from: now)
         let calendar = Calendar.current
+        let lead = Double(minutesBefore) * 60
 
-        let upcoming: [ClassOccurrence] = sessions.flatMap { session in
-            session.occurrenceDates(from: now, to: end)
-                .map { ClassOccurrence(session: session, date: $0) }
-                // A class starting this very second cannot be reminded about.
-                .filter { !$0.isCompleted && $0.date.timeIntervalSince(now) > 2 }
-                .prefix(maxRemindersPerClass)
+        var repeating: [(date: Date, request: UNNotificationRequest)] = []
+        var upcoming: [ClassOccurrence] = []
+
+        for session in sessions {
+            // A class starting this very second cannot be reminded about.
+            let isRemindable: (Date) -> Bool = { !session.isCompleted(on: $0) && $0.timeIntervalSince(now) > 2 }
+
+            if let components = repeatingReminderComponents(for: session, minutesBefore: minutesBefore, now: now, calendar: calendar) {
+                // Marking one occurrence complete cannot silence a repeating
+                // trigger (iOS has no per-fire exceptions), so a completed
+                // day is still reminded. Accepted: never missing a class
+                // matters more than one extra banner.
+                let content = UNMutableNotificationContent()
+                content.sound = .default
+                content.title = "Class Starting Soon"
+                content.body = "\(session.title) starts in \(minutesBefore) minutes"
+                let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
+                let request = UNNotificationRequest(identifier: "\(session.id.uuidString)-repeat", content: content, trigger: trigger)
+                repeating.append((trigger.nextTriggerDate() ?? now, request))
+
+                // The repeating trigger's time for an occurrence sooner than
+                // the lead time has already passed: keep the one-shot
+                // "starting now" reminder for it (built below).
+                if let soon = session.occurrenceDates(from: now, to: now.addingTimeInterval(lead)).first(where: isRemindable) {
+                    upcoming.append(ClassOccurrence(session: session, date: soon))
+                }
+            } else {
+                upcoming += session.occurrenceDates(from: now, to: end)
+                    .filter(isRemindable)
+                    .prefix(maxRemindersPerClass)
+                    .map { ClassOccurrence(session: session, date: $0) }
+            }
         }
-        .sorted { $0.date < $1.date }
 
-        return upcoming.prefix(maxPendingReminders).map { occurrence in
+        let oneShots: [(date: Date, request: UNNotificationRequest)] = upcoming.map { occurrence in
             let title = occurrence.session.title
             let content = UNMutableNotificationContent()
             content.sound = .default
 
-            var fireDate = occurrence.date.addingTimeInterval(-Double(minutesBefore) * 60)
+            var fireDate = occurrence.date.addingTimeInterval(-lead)
             if fireDate.timeIntervalSince(now) > 2 {
                 content.title = "Class Starting Soon"
                 content.body = "\(title) starts in \(minutesBefore) minutes"
@@ -251,8 +284,51 @@ class NotificationManager: ObservableObject {
 
             let components = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: fireDate)
             let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
-            return UNNotificationRequest(identifier: occurrence.id, content: content, trigger: trigger)
+            return (fireDate, UNNotificationRequest(identifier: occurrence.id, content: content, trigger: trigger))
         }
+
+        // Soonest first, so the cap drops the reminders furthest away.
+        return (repeating + oneShots)
+            .sorted { $0.date < $1.date }
+            .prefix(maxPendingReminders)
+            .map(\.request)
+    }
+
+    /// Date components for a repeating reminder of `session`, or nil when the
+    /// class has to keep one-shot reminders:
+    /// - it does not repeat;
+    /// - its first class is more than one repeat period away (a repeating
+    ///   trigger would fire before the series starts);
+    /// - it is monthly on a day a repeating trigger cannot follow: the
+    ///   29th–31st (iOS skips months without that day, while the class moves
+    ///   to the month's last day), or a reminder that falls in the month
+    ///   before the class.
+    static func repeatingReminderComponents(for session: ClassSession, minutesBefore: Int, now: Date, calendar: Calendar = .current) -> DateComponents? {
+        let period: DateComponents
+        switch session.recurring {
+        case .none: return nil
+        case .daily: period = DateComponents(day: 1)
+        case .weekly: period = DateComponents(day: 7)
+        case .monthly: period = DateComponents(month: 1)
+        }
+        guard let onePeriodAhead = calendar.date(byAdding: period, to: now), session.date <= onePeriodAhead else { return nil }
+
+        // Taken from the reminder time, not the class time: with a class just
+        // after midnight the reminder belongs to the day before.
+        let fireDate = session.date.addingTimeInterval(-Double(minutesBefore) * 60)
+        let fire = calendar.dateComponents([.day, .weekday, .hour, .minute], from: fireDate)
+        var components = DateComponents(hour: fire.hour, minute: fire.minute)
+        switch session.recurring {
+        case .weekly:
+            components.weekday = fire.weekday
+        case .monthly:
+            guard calendar.component(.day, from: session.date) <= 28,
+                  calendar.isDate(fireDate, equalTo: session.date, toGranularity: .month) else { return nil }
+            components.day = fire.day
+        case .daily, .none:
+            break
+        }
+        return components
     }
     
     /// Class reminders are the only notifications this app schedules.

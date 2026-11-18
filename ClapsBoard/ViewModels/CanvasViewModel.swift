@@ -400,7 +400,7 @@ class CanvasViewModel: ObservableObject {
             // they are drawn, so neither is cropped.
             var rect = element.contentBounds
             if element.rotation != 0 {
-                let center = CGPoint(x: element.x + element.width / 2, y: element.y + element.height / 2)
+                let center = element.rotationPivot
                 rect = rect.applying(CGAffineTransform(translationX: center.x, y: center.y)
                     .rotated(by: element.rotation)
                     .translatedBy(x: -center.x, y: -center.y))
@@ -560,7 +560,7 @@ class CanvasViewModel: ObservableObject {
         
         // Apply rotation if any
         if element.rotation != 0 {
-            let center = CGPoint(x: element.x + element.width / 2, y: element.y + element.height / 2)
+            let center = element.rotationPivot // same pivot as DrawingCanvas
             context.translateBy(x: center.x, y: center.y)
             context.rotate(by: element.rotation)
             context.translateBy(x: -center.x, y: -center.y)

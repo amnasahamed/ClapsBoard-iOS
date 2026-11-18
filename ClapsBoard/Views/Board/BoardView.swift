@@ -9,6 +9,8 @@ import SwiftUI
 import PencilKit
 import UIKit
 import PDFKit
+import PhotosUI
+import ImageIO
 
 struct BoardView: View {
     @ObservedObject var viewModel: CanvasViewModel
@@ -28,6 +30,9 @@ struct BoardView: View {
     @State private var teachElapsed: TimeInterval = 0
     @State private var teachHistoryId: UUID?
     @State private var showMathToolkit = false
+    @State private var showPhotoPicker = false
+    @State private var pickedPhoto: PhotosPickerItem?
+    @State private var photoInsertFailed = false
     @State private var showLayerControls = false
     @State private var showPageSwitcher = false
     @State private var showDocumentBesideBoard = false
@@ -318,6 +323,18 @@ struct BoardView: View {
         }
         .sheet(isPresented: $showMathToolkit) {
             MathToolkitView { image, diagram in insertMathDiagram(image, diagram) }
+        }
+        // The system picker runs out of process, so no photo permission is needed.
+        .photosPicker(isPresented: $showPhotoPicker, selection: $pickedPhoto, matching: .images)
+        .onChange(of: pickedPhoto) { _, item in
+            guard let item else { return }
+            pickedPhoto = nil // so the same photo can be picked again
+            insertPhoto(item)
+        }
+        .alert("Couldn't Add Image", isPresented: $photoInsertFailed) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("That photo could not be loaded. Try another one.")
         }
         .sheet(isPresented: $showLayerControls) {
             AnswerLayerControls(
@@ -701,7 +718,7 @@ struct BoardView: View {
                         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: viewModel.showProperties)
                 }
 
-                ToolbarView(viewModel: viewModel)
+                ToolbarView(viewModel: viewModel, onInsertImage: { showPhotoPicker = true })
                     .zIndex(1)
             }
             // 8pt keeps the full tool bar (with Marker) on 393pt-wide phones.
@@ -731,7 +748,7 @@ struct BoardView: View {
                         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: viewModel.showProperties)
                 }
 
-                ToolbarView(viewModel: viewModel, orientation: .vertical)
+                ToolbarView(viewModel: viewModel, orientation: .vertical, onInsertImage: { showPhotoPicker = true })
             }
         }
     }
@@ -791,15 +808,64 @@ struct BoardView: View {
     private func insertMathDiagram(_ image: UIImage, _ diagram: MathDiagram) {
         guard let data = image.pngData(),
               let mediaId = StorageService.shared.saveMedia(data) else { return }
+        insertImageElement(mediaId: mediaId, size: diagram.size, maxWidth: 560)
+        showMathToolkit = false
+    }
+
+    /// Loads the picked photo, shrinks it and puts it on the board.
+    private func insertPhoto(_ item: PhotosPickerItem) {
+        Task {
+            // Decoding and re-encoding a photo is too slow for the main thread.
+            let prepared: (data: Data, size: CGSize)? = await Task.detached(priority: .userInitiated) {
+                guard let raw = try? await item.loadTransferable(type: Data.self) else { return nil }
+                return Self.downscaledImageData(from: raw, maxPixelSize: 1600)
+            }.value
+            await MainActor.run {
+                guard let prepared, let mediaId = StorageService.shared.saveMedia(prepared.data) else {
+                    photoInsertFailed = true
+                    return
+                }
+                let element = insertImageElement(mediaId: mediaId, size: prepared.size, maxWidth: prepared.size.width)
+                viewModel.selectedElement = element
+            }
+        }
+    }
+
+    /// Re-encodes an image so its longest side is at most `maxPixelSize`
+    /// pixels (never enlarged), upright. ImageIO does this without first
+    /// decoding the full-size photo. PNG is kept only for images with
+    /// transparency; photos become JPEG, which is far smaller.
+    nonisolated private static func downscaledImageData(from data: Data, maxPixelSize: CGFloat) -> (data: Data, size: CGSize)? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true, // apply EXIF orientation
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        let image = UIImage(cgImage: cgImage)
+        let hasAlpha: Bool
+        switch cgImage.alphaInfo {
+        case .none, .noneSkipFirst, .noneSkipLast: hasAlpha = false
+        default: hasAlpha = true
+        }
+        guard let encoded = hasAlpha ? image.pngData() : image.jpegData(compressionQuality: 0.85) else { return nil }
+        return (encoded, CGSize(width: cgImage.width, height: cgImage.height))
+    }
+
+    /// Adds an image element centred in the visible board area, keeping the
+    /// aspect ratio of `size` (one undo step) and switches to Select.
+    @discardableResult
+    private func insertImageElement(mediaId: String, size: CGSize, maxWidth: CGFloat) -> DrawingElement {
         // Size it to at most ~70% of the visible board at the current zoom,
         // so it lands where the tutor is looking and fits on screen.
         let zoom = max(viewModel.zoom, 0.1)
         let windowSize = activeWindowScene?.windows.first(where: { $0.isKeyWindow })?.bounds.size ?? CGSize(width: 390, height: 844)
-        let scale = min(0.7 * windowSize.width / zoom / diagram.size.width,
-                        0.6 * windowSize.height / zoom / diagram.size.height,
-                        560 / diagram.size.width)
-        let width = diagram.size.width * scale
-        let height = diagram.size.height * scale
+        let scale = min(0.7 * windowSize.width / zoom / max(size.width, 1),
+                        0.6 * windowSize.height / zoom / max(size.height, 1),
+                        maxWidth / max(size.width, 1))
+        let width = size.width * scale
+        let height = size.height * scale
         let visibleCenterX = canvasSize / 2 - viewModel.pan.x / max(viewModel.zoom, 0.1)
         let visibleCenterY = canvasSize / 2 - viewModel.pan.y / max(viewModel.zoom, 0.1)
         let element = DrawingElement(
@@ -813,7 +879,7 @@ struct BoardView: View {
         )
         viewModel.addElement(element)
         viewModel.tool = .select
-        showMathToolkit = false
+        return element
     }
 }
 
